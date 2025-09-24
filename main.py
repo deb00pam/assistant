@@ -74,19 +74,26 @@ CRITICAL INSTRUCTIONS:
 - NEVER use "edge website.com" command syntax  
 - Use Windows UI elements: Start menu, taskbar, applications
 - Key combinations like Ctrl+L must be written as "ctrl+l" (NOT separate keys)
-- To open applications: Press Windows key → Type app name → Press Enter
-- To navigate to websites: Open browser first, then use address bar with Ctrl+L
 
-EXACT ACTIONS REQUIRED for browser + website tasks:
+TASK CLASSIFICATION:
+- System/App tasks (settings, updates, calculator, notepad, word, excel) → Open Windows apps directly
+- Website tasks (go to website.com, visit site.org, chatgpt.com) → Open browser first, then navigate
+- Browser tasks (open chrome, open edge) → Open browser app only
+
+For SYSTEM/APP tasks like "settings", "updates", "calculator", "notepad":
+1. Press "win" key (opens Start menu)  
+2. Type the app name (e.g., "settings", "calculator", "notepad")
+3. Press "enter" (launches the Windows app)
+
+For WEBSITE tasks containing URLs (.com, .org) or "go to" phrases:
 1. Press "win" key (opens Start menu)
-2. Type application name only (e.g., "edge")
-3. Press "enter" (launches app)
-4. Wait 3 seconds (app loading time)
-5. Press "ctrl+l" key combination (focuses address bar)
-6. Type URL only (e.g., "chatgpt.com")
-7. Press "enter" (navigates to site)
+2. Type browser name (e.g., "edge", "chrome") 
+3. Press "enter" (launches browser)
+4. Press "ctrl+l" (focuses address bar)
+5. Type website URL only
+6. Press "enter" (navigates to site)
 
-Please respond EXACTLY in this JSON format:
+Please respond in this JSON format:
 {{
     "understanding": "What I see on screen",
     "actions": [
@@ -98,43 +105,19 @@ Please respond EXACTLY in this JSON format:
         }},
         {{
             "action_type": "type", 
-            "text": "edge",
-            "description": "Type 'edge' to search for browser",
+            "text": "settings",
+            "description": "Type 'settings' to search for Settings app",
             "confidence": 0.9
         }},
         {{
             "action_type": "key_press",
             "key": "enter", 
-            "description": "Press Enter to launch Edge",
-            "confidence": 0.9
-        }},
-        {{
-            "action_type": "wait",
-            "duration": 3,
-            "description": "Wait for browser to load",
-            "confidence": 0.9
-        }},
-        {{
-            "action_type": "key_press",
-            "key": "ctrl+l",
-            "description": "Press Ctrl+L to focus address bar", 
-            "confidence": 0.9
-        }},
-        {{
-            "action_type": "type",
-            "text": "chatgpt.com",
-            "description": "Type website URL",
-            "confidence": 0.9
-        }},
-        {{
-            "action_type": "key_press", 
-            "key": "enter",
-            "description": "Press Enter to navigate",
+            "description": "Press Enter to open Settings",
             "confidence": 0.9
         }}
     ],
     "safety_concerns": [],
-    "next_steps": "Browser should open and navigate to website",
+    "next_steps": "Application should open",
     "overall_confidence": 0.9
 }}
 """
@@ -371,13 +354,102 @@ class DesktopAssistant:
         logging.info("Desktop Assistant initialized")
     
     def execute_task(self, task_description: str) -> Dict[str, Any]:
-        """Execute a high-level task."""
+        """Execute a high-level task with multi-step capability."""
         logging.info(f"Starting task: {task_description}")
         
         self.current_task = task_description
         self.task_progress = []
         self.is_running = True
         
+        # Check if this is a multi-step task
+        multi_step_indicators = [
+            'and', 'then', 'check for', 'download', 'install', 'update', 
+            'click on', 'navigate to', 'find', 'search for', 'select'
+        ]
+        is_multi_step = any(indicator in task_description.lower() for indicator in multi_step_indicators)
+        
+        if is_multi_step:
+            logging.info("🔄 Detected multi-step task - will use iterative approach")
+            return self._execute_multi_step_task(task_description)
+        else:
+            logging.info("📝 Single-step task - using standard approach")
+            return self._execute_single_step_task(task_description)
+    
+    def _execute_multi_step_task(self, task_description: str) -> Dict[str, Any]:
+        """Execute a complex task that may require multiple screenshots and analysis cycles."""
+        max_iterations = 5
+        all_results = []
+        original_task = task_description
+        
+        try:
+            for iteration in range(max_iterations):
+                logging.info(f"🔄 Multi-step iteration {iteration + 1}/{max_iterations}")
+                
+                # Take screenshot of current state
+                screenshot = self.screen_analyzer.capture_screenshot()
+                
+                # Create context-aware prompt that includes what we've accomplished
+                if iteration == 0:
+                    current_prompt = f"TASK: {task_description}\n\nThis is the beginning of a multi-step task. Analyze what needs to be done first."
+                else:
+                    completed_actions = [r.get('description', 'Unknown action') for results in all_results for r in results if r.get('success')]
+                    current_prompt = f"ORIGINAL TASK: {original_task}\n\nCOMPLETED STEPS: {completed_actions}\n\nCurrent screen shows the result of previous actions. What should be done next to complete the original task? If the task appears complete, respond with no actions."
+                
+                # Get AI analysis for current step
+                analysis = self.gemini_client.analyze_screenshot(screenshot, current_prompt)
+                
+                if "error" in analysis:
+                    logging.error(f"Analysis error: {analysis['error']}")
+                    break
+                
+                actions = analysis.get("actions", [])
+                
+                # Check if task appears complete (no more actions needed)
+                if not actions:
+                    logging.info("✅ Task appears complete - no more actions suggested")
+                    break
+                
+                logging.info(f"AI generated {len(actions)} actions for iteration {iteration + 1}: {[a.get('description', 'No desc') for a in actions]}")
+                
+                # Execute this iteration's actions
+                results = self._execute_action_sequence(actions)
+                all_results.append(results)
+                
+                # Check if all actions failed - might indicate we're stuck
+                if all(not r.get("success", False) for r in results):
+                    logging.warning("All actions failed - ending multi-step process")
+                    break
+                
+                # Brief pause between iterations to let UI update
+                import time
+                time.sleep(1)
+            
+            # Calculate overall success
+            total_successful = sum(len([r for r in results if r.get("success", False)]) for results in all_results)
+            total_actions = sum(len(results) for results in all_results)
+            
+            return {
+                "success": total_successful > 0,
+                "task_description": original_task,
+                "initial_analysis": f"Multi-step task completed in {len(all_results)} iterations",
+                "actions_completed": total_successful,
+                "total_actions": total_actions,
+                "action_results": [item for sublist in all_results for item in sublist],
+                "iterations": len(all_results)
+            }
+            
+        except Exception as e:
+            logging.error(f"Error in multi-step task: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "actions_completed": len(self.task_progress)
+            }
+        finally:
+            self.is_running = False
+    
+    def _execute_single_step_task(self, task_description: str) -> Dict[str, Any]:
+        """Execute a simple single-step task (original behavior)."""
         try:
             # Capture screenshot
             screenshot = self.screen_analyzer.capture_screenshot()
