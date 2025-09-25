@@ -44,6 +44,8 @@ class AssistantConfig:
     action_timeout: int = 30
     screenshot_dir: str = "screenshots"
     log_level: str = "INFO"
+    offline_fallback_enabled: bool = True  # Use heuristic planner if API quota exceeded
+    model_name: str = "auto"  # 'auto' selects best available
 
 
 # =============================================================================
@@ -52,14 +54,54 @@ class AssistantConfig:
 
 class GeminiClient:
     """Client for interacting with Google's Gemini AI API."""
-    
-    def __init__(self, api_key: Optional[str] = None):
+    PREFERRED_MODELS = [
+        'gemini-2.0-flash-exp',
+        'gemini-1.5-flash',
+        'gemini-1.5-flash-8b',
+        'gemini-1.5-pro',
+    ]
+
+    def __init__(self, api_key: Optional[str] = None, config: Optional[AssistantConfig] = None):
         self.api_key = api_key or os.getenv('GOOGLE_AI_API_KEY')
         if not self.api_key:
             raise ValueError("Google AI API key is required")
-            
+        self.config = config or AssistantConfig()
         genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        chosen = self._select_model(self.config.model_name)
+        logging.info(f"Using Gemini model: {chosen}")
+        self.model = genai.GenerativeModel(chosen)
+
+    def _select_model(self, requested: str) -> str:
+        """Select model based on request or auto preference order."""
+        try:
+            models = list(genai.list_models())
+            model_names = {m.name.split('/')[-1]: m for m in models}
+        except Exception as e:
+            logging.warning(f"Could not list models ({e}); falling back to default")
+            return self.PREFERRED_MODELS[0]
+
+        if requested != 'auto':
+            # Accept direct if available, else warn and fallback
+            if requested in model_names:
+                return requested
+            logging.warning(f"Requested model '{requested}' not available; falling back to auto selection")
+        for candidate in self.PREFERRED_MODELS:
+            if candidate in model_names:
+                return candidate
+        # Fallback: pick any text capable model
+        for name in model_names:
+            if 'flash' in name or 'pro' in name:
+                return name
+        # Last resort
+        return self.PREFERRED_MODELS[0]
+
+    @staticmethod
+    def list_available_models() -> List[str]:
+        try:
+            return [m.name.split('/')[-1] for m in genai.list_models()]
+        except Exception as e:
+            logging.error(f"Failed to list models: {e}")
+            return []
         
     def analyze_screenshot(self, image: Image.Image, task_description: str) -> Dict[str, Any]:
         """Analyze a screenshot and provide action recommendations."""
@@ -126,12 +168,64 @@ Please respond in this JSON format:
             return self._parse_response(response.text)
             
         except Exception as e:
-            logging.error(f"Error analyzing screenshot: {e}")
-            return {
-                "error": str(e),
-                "actions": [],
-                "confidence": 0.0
-            }
+            err_text = str(e)
+            logging.error(f"Error analyzing screenshot: {err_text}")
+            # Quota / rate limit fallback
+            if self.config.offline_fallback_enabled and ('quota' in err_text.lower() or '429' in err_text):
+                logging.warning("Using offline heuristic fallback planner due to quota/rate limit")
+                return self._rule_based_plan(task_description)
+            return {"error": err_text, "actions": [], "confidence": 0.0}
+
+    def _rule_based_plan(self, task: str) -> Dict[str, Any]:
+        """Heuristic local planner used when API unavailable (rate limits etc.)."""
+        t = task.lower()
+        actions: List[Dict[str, Any]] = []
+        understanding = "Heuristic fallback plan generated (no model)."
+        confidence = 0.4
+        # Basic primitives
+        def start_and_type(app: str):
+            return [
+                {"action_type": "key_press", "key": "win", "description": "Open start menu (fallback)"},
+                {"action_type": "type", "text": app, "description": f"Type '{app}' in start menu (fallback)"},
+                {"action_type": "key_press", "key": "enter", "description": f"Launch {app} (fallback)"},
+            ]
+        if any(k in t for k in ["youtube", "song", "video", "play"]):
+            # Extract a probable query after 'search' or 'for'
+            import re
+            query = ""
+            m = re.search(r'search(?: for)? (.*)', t)
+            if m:
+                query = m.group(1)
+            query = query.replace('play', '').replace('youtube', '').strip()
+            actions.extend(start_and_type('edge'))
+            actions.append({"action_type": "key_press", "key": "ctrl+l", "description": "Focus address bar (fallback)"})
+            actions.append({"action_type": "type", "text": "https://www.youtube.com", "description": "Type YouTube URL (fallback)"})
+            actions.append({"action_type": "key_press", "key": "enter", "description": "Navigate to YouTube (fallback)"})
+            if query:
+                actions.append({"action_type": "click", "description": "Click YouTube search bar (fallback)"})
+                actions.append({"action_type": "type", "text": query, "description": f"Type search query '{query}' (fallback)"})
+                actions.append({"action_type": "key_press", "key": "enter", "description": "Submit search (fallback)"})
+        elif any(k in t for k in ["update", "windows update", "check for updates"]):
+            actions.extend(start_and_type('settings'))
+            actions.append({"action_type": "type", "text": "windows update", "description": "Type 'windows update' inside Settings (fallback)"})
+            actions.append({"action_type": "key_press", "key": "enter", "description": "Open Windows Update section (fallback)"})
+        elif any(k in t for k in ["notepad", "note pad"]):
+            actions.extend(start_and_type('notepad'))
+        elif any(k in t for k in ["calc", "calculator"]):
+            actions.extend(start_and_type('calculator'))
+        else:
+            # Generic attempt: open start and type something meaningful
+            words = t.split()
+            if words:
+                actions.extend(start_and_type(words[0]))
+        return {
+            "understanding": understanding,
+            "actions": actions,
+            "safety_concerns": [],
+            "next_steps": "Executed heuristic plan; consider re-running when quota resets",
+            "overall_confidence": confidence,
+            "fallback_used": True
+        }
     
     def _parse_response(self, response_text: str) -> Dict[str, Any]:
         """Parse the AI response into structured data."""
@@ -403,6 +497,21 @@ class DesktopAssistant:
                     break
                 
                 actions = analysis.get("actions", [])
+                # If heuristic fallback used on later iteration, prune duplicates
+                if analysis.get('fallback_used') and iteration > 0 and actions:
+                    before_ct = len(actions)
+                    actions = self._prune_redundant_fallback(actions)
+                    if len(actions) != before_ct:
+                        logging.info(f"Pruned {before_ct - len(actions)} duplicate fallback actions")
+                    if not actions:
+                        # Try infer next logical step
+                        inferred = self._infer_next_step(original_task)
+                        if inferred:
+                            actions = [inferred]
+                            logging.info(f"Injected inferred action: {inferred.get('description')}")
+                        else:
+                            logging.info("No further inferred actions; ending multi-step process")
+                            break
                 
                 # Check if task appears complete (no more actions needed)
                 if not actions:
@@ -414,6 +523,11 @@ class DesktopAssistant:
                 # Execute this iteration's actions
                 results = self._execute_action_sequence(actions)
                 all_results.append(results)
+
+                # If this batch came from fallback planner, stop further iterations
+                if analysis.get('fallback_used'):
+                    logging.info("Heuristic fallback plan executed; ending multi-step iterations early.")
+                    break
                 
                 # Check if all actions failed - might indicate we're stuck
                 if all(not r.get("success", False) for r in results):
@@ -447,6 +561,35 @@ class DesktopAssistant:
             }
         finally:
             self.is_running = False
+
+    def _prune_redundant_fallback(self, actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        existing = {
+            (r.get('action', {}).get('description','').lower())
+            for r in self.task_progress if r.get('success')
+        }
+        return [a for a in actions if a.get('description','').lower() not in existing]
+
+    def _infer_next_step(self, original_task: str) -> Optional[Dict[str, Any]]:
+        t = original_task.lower()
+        if any(k in t for k in ['youtube','play','video','song']):
+            # If search submitted but no video clicked, click first video
+            submitted = any(
+                ('submit search' in (r.get('action', {}).get('description','').lower()) or
+                 'submit youtube search' in (r.get('action', {}).get('description','').lower())) and r.get('success')
+                for r in self.task_progress
+            )
+            clicked_video = any('click first youtube video' in (r.get('action', {}).get('description','').lower()) for r in self.task_progress)
+            if submitted and not clicked_video:
+                try:
+                    screen_w, screen_h = pyautogui.size()
+                except Exception:
+                    screen_w, screen_h = 1920,1080
+                return {
+                    'action_type':'click',
+                    'coordinates':[int(screen_w*0.25), int(screen_h*0.35)],
+                    'description':'Click first YouTube video result (inferred)'
+                }
+        return None
     
     def _execute_single_step_task(self, task_description: str) -> Dict[str, Any]:
         """Execute a simple single-step task (original behavior)."""
@@ -728,10 +871,19 @@ def interactive_mode():
     print()
     
     # Load configuration
+    # Preload available models (ignore failures silently)
+    try:
+        available = GeminiClient.list_available_models()
+    except Exception:
+        available = []
+    default_model = 'auto'
+    print(f"Available models: {', '.join(available) if available else 'unknown (API list failed)'}")
+    chosen = input(f"Choose model (or press Enter for {default_model}): ").strip() or default_model
     config = AssistantConfig(
-        safe_mode=False,  # Always disabled
-        confirmation_required=False,  # Always disabled
-        screenshot_dir=os.getenv('SCREENSHOT_DIR', 'screenshots')
+        safe_mode=False,
+        confirmation_required=False,
+        screenshot_dir=os.getenv('SCREENSHOT_DIR', 'screenshots'),
+        model_name=chosen
     )
     
     # Initialize assistant
@@ -926,11 +1078,12 @@ def handle_config_command(assistant: DesktopAssistant, command: str):
 def single_task_mode(task: str):
     """Execute a single task and exit."""
     print(f"🚀 Executing single task: {task}")
-    
+    model = os.getenv('ASSISTANT_MODEL', 'auto')
     config = AssistantConfig(
-        safe_mode=False,  # Always disabled
-        confirmation_required=False,  # Always disabled
-        screenshot_dir=os.getenv('SCREENSHOT_DIR', 'screenshots')
+        safe_mode=False,
+        confirmation_required=False,
+        screenshot_dir=os.getenv('SCREENSHOT_DIR', 'screenshots'),
+        model_name=model
     )
     
     try:
@@ -985,6 +1138,16 @@ Examples:
         action='store_true',
         help='Disable safe mode'
     )
+    parser.add_argument(
+        '--model',
+        default='auto',
+        help='Specify Gemini model name or auto for best available'
+    )
+    parser.add_argument(
+        '--list-models',
+        action='store_true',
+        help='List available models and exit'
+    )
     
     args = parser.parse_args()
     
@@ -994,11 +1157,29 @@ Examples:
     
     if args.no_safe_mode:
         os.environ['SAFE_MODE'] = 'false'
+
+    # Handle model listing
+    if args.list_models:
+        try:
+            models = GeminiClient.list_available_models()
+            if models:
+                print("Available models:")
+                for m in models:
+                    sel = '*' if m == args.model else ' '
+                    print(f" {sel} {m}")
+            else:
+                print("No models retrieved (check API key / network)")
+        except Exception as e:
+            print(f"Failed to list models: {e}")
+        return
+
+    # Persist chosen model to env for single_task_mode helper
+    os.environ['ASSISTANT_MODEL'] = args.model
     
     # Run appropriate mode
     try:
         if args.analyze:
-            config = AssistantConfig()
+            config = AssistantConfig(model_name=args.model)
             assistant = DesktopAssistant(config)
             analyze_screen(assistant)
         elif args.task:
