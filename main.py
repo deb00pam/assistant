@@ -44,6 +44,17 @@ except ImportError:
     SKLEARN_AVAILABLE = False
     print("⚠️  NLP libraries not installed. Using basic keyword detection. Install with: pip install scikit-learn nltk")
 
+# Voice recognition imports
+try:
+    import speech_recognition as sr
+    import pyttsx3
+    import threading
+    import queue
+    VOICE_AVAILABLE = True
+except ImportError:
+    VOICE_AVAILABLE = False
+    print("⚠️  Voice libraries not installed. Voice mode disabled. Install with: pip install SpeechRecognition pyttsx3 pyaudio")
+
 
 # =============================================================================
 # Configuration and Data Classes
@@ -60,6 +71,13 @@ class AssistantConfig:
     log_level: str = "INFO"
     offline_fallback_enabled: bool = True  # Use heuristic planner if API quota exceeded
     model_name: str = "auto"  # 'auto' selects best available
+    # Voice settings
+    voice_enabled: bool = False  # Voice mode disabled by default
+    voice_language: str = "en-US"  # Default language for speech recognition
+    tts_rate: int = 150  # Text-to-speech speech rate (words per minute)
+    tts_volume: float = 0.9  # Text-to-speech volume (0.0 to 1.0)
+    voice_timeout: float = 5.0  # Seconds to wait for speech input
+    push_to_talk_key: str = "space"  # Key for push-to-talk mode
 
 
 # =============================================================================
@@ -872,6 +890,205 @@ class ChatBot:
         return self.intent_classifier.classify_intent(text)
 
 
+class VoiceHandler:
+    """Handles speech recognition and text-to-speech functionality."""
+    
+    def __init__(self, config: Optional[AssistantConfig] = None):
+        self.config = config or AssistantConfig()
+        self.is_available = VOICE_AVAILABLE
+        self.recognizer = None
+        self.microphone = None
+        self.tts_engine = None
+        self.is_listening = False
+        self.voice_queue = queue.Queue()
+        self.listening_thread = None
+        
+        if VOICE_AVAILABLE:
+            self._initialize_voice_components()
+        else:
+            logging.warning("Voice support not available - missing dependencies")
+    
+    def _initialize_voice_components(self):
+        """Initialize speech recognition and TTS components."""
+        try:
+            # Initialize speech recognition
+            self.recognizer = sr.Recognizer()
+            self.microphone = sr.Microphone()
+            
+            # Calibrate microphone for ambient noise
+            with self.microphone as source:
+                logging.info("🎤 Calibrating microphone for ambient noise...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=1)
+            
+            # Initialize text-to-speech
+            self.tts_engine = pyttsx3.init()
+            self.tts_engine.setProperty('rate', self.config.tts_rate)
+            self.tts_engine.setProperty('volume', self.config.tts_volume)
+            
+            # Set voice (try to use female voice if available)
+            voices = self.tts_engine.getProperty('voices')
+            if voices:
+                # Try to find a female voice
+                female_voice = next((voice for voice in voices if 'female' in voice.name.lower() or 'zira' in voice.name.lower()), None)
+                if female_voice:
+                    self.tts_engine.setProperty('voice', female_voice.id)
+                else:
+                    # Use first available voice
+                    self.tts_engine.setProperty('voice', voices[0].id)
+            
+            logging.info("✅ Voice components initialized successfully")
+            
+        except Exception as e:
+            logging.error(f"Failed to initialize voice components: {e}")
+            self.is_available = False
+    
+    def speak(self, text: str) -> bool:
+        """Convert text to speech."""
+        if not self.is_available or not self.tts_engine:
+            logging.warning("TTS not available - is_available: {}, tts_engine: {}".format(self.is_available, self.tts_engine is not None))
+            print("🔇 TTS not available")
+            return False
+        
+        try:
+            print(f"🔊 Speaking: {text[:50]}{'...' if len(text) > 50 else ''}")
+            logging.info(f"🔊 Speaking: {text[:50]}{'...' if len(text) > 50 else ''}")
+            self.tts_engine.say(text)
+            self.tts_engine.runAndWait()
+            print("✅ Speech completed")
+            return True
+        except Exception as e:
+            logging.error(f"TTS error: {e}")
+            print(f"❌ TTS error: {e}")
+            return False
+    
+    def listen_once(self, timeout: Optional[float] = None) -> Optional[str]:
+        """Listen for a single voice command."""
+        if not self.is_available or not self.recognizer or not self.microphone:
+            logging.warning("Speech recognition not available")
+            return None
+        
+        timeout = timeout or self.config.voice_timeout
+        
+        try:
+            print("🎤 Listening... (speak now)")
+            
+            with self.microphone as source:
+                # Listen for audio with timeout
+                audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=10)
+            
+            print("🔍 Processing speech...")
+            
+            # Recognize speech using Google's speech recognition
+            text = self.recognizer.recognize_google(audio, language=self.config.voice_language)
+            
+            logging.info(f"🎤 Recognized: '{text}'")
+            print(f"✅ You said: '{text}'")
+            
+            return text.strip()
+            
+        except sr.WaitTimeoutError:
+            print("⏱️  No speech detected (timeout)")
+            return None
+        except sr.UnknownValueError:
+            print("⚠️  Could not understand audio")
+            return None
+        except sr.RequestError as e:
+            logging.error(f"Speech recognition error: {e}")
+            print(f"❌ Speech recognition error: {e}")
+            return None
+        except Exception as e:
+            logging.error(f"Unexpected voice error: {e}")
+            return None
+    
+    def start_continuous_listening(self, callback_func):
+        """Start continuous listening in background thread."""
+        if not self.is_available or self.is_listening:
+            return False
+        
+        self.is_listening = True
+        self.listening_thread = threading.Thread(
+            target=self._continuous_listen_worker, 
+            args=(callback_func,),
+            daemon=True
+        )
+        self.listening_thread.start()
+        print("🎤 Continuous listening started (say 'stop listening' to quit)")
+        return True
+    
+    def stop_continuous_listening(self):
+        """Stop continuous listening."""
+        self.is_listening = False
+        if self.listening_thread:
+            self.listening_thread.join(timeout=2)
+        print("🔇 Continuous listening stopped")
+    
+    def _continuous_listen_worker(self, callback_func):
+        """Worker function for continuous listening."""
+        while self.is_listening:
+            try:
+                text = self.listen_once(timeout=1.0)  # Short timeout for responsiveness
+                
+                if text:
+                    # Check for stop command
+                    if any(phrase in text.lower() for phrase in ['stop listening', 'quit voice', 'disable voice']):
+                        print("🔇 Stop command detected")
+                        self.is_listening = False
+                        break
+                    
+                    # Send recognized text to callback
+                    callback_func(text)
+                
+            except Exception as e:
+                logging.error(f"Continuous listening error: {e}")
+                continue
+    
+    def test_voice_setup(self) -> bool:
+        """Test voice recognition and TTS setup."""
+        if not self.is_available:
+            print("❌ Voice support not available")
+            return False
+        
+        print("📢 Testing voice setup...")
+        
+        # Test TTS
+        if self.speak("Voice test. Can you hear me?"):
+            print("✅ Text-to-speech working")
+        else:
+            print("❌ Text-to-speech failed")
+            return False
+        
+        # Test speech recognition
+        print("🎤 Now testing speech recognition...")
+        text = self.listen_once(timeout=10)
+        
+        if text:
+            print(f"✅ Speech recognition working. You said: '{text}'")
+            self.speak(f"I heard you say: {text}")
+            return True
+        else:
+            print("❌ Speech recognition failed or no input detected")
+            return False
+    
+    def get_voice_info(self) -> Dict[str, Any]:
+        """Get information about voice capabilities."""
+        info = {
+            "available": self.is_available,
+            "listening": self.is_listening
+        }
+        
+        if self.is_available and self.tts_engine:
+            try:
+                voices = self.tts_engine.getProperty('voices')
+                info["tts_voices"] = len(voices) if voices else 0
+                info["current_voice"] = self.tts_engine.getProperty('voice')
+                info["tts_rate"] = self.tts_engine.getProperty('rate')
+                info["tts_volume"] = self.tts_engine.getProperty('volume')
+            except Exception:
+                pass
+        
+        return info
+
+
 class DesktopAssistant:
     """Main desktop assistant class."""
     
@@ -888,6 +1105,7 @@ class DesktopAssistant:
         self.screen_analyzer = ScreenAnalyzer(self.config.screenshot_dir)
         self.gemini_client = GeminiClient()
         self.gui_automator = GUIAutomator()
+        self.voice_handler = VoiceHandler(self.config) if self.config.voice_enabled else None
         
         # Task state
         self.current_task = None
@@ -1399,6 +1617,25 @@ def interactive_mode():
             elif user_input.lower().startswith('config'):
                 handle_config_command(assistant, user_input)
                 continue
+            # Voice commands
+            elif user_input.lower() in ['voice', 'enable voice', 'voice on']:
+                toggle_voice_mode(assistant, True)
+                continue
+            elif user_input.lower() in ['no voice', 'disable voice', 'voice off']:
+                toggle_voice_mode(assistant, False)
+                continue
+            elif user_input.lower() in ['voice test', 'test voice']:
+                test_voice_setup(assistant)
+                continue
+            elif user_input.lower() in ['voice listen', 'listen', 'voice input']:
+                handle_voice_input(assistant, chatbot)
+                continue
+            elif user_input.lower() in ['voice mode', 'continuous voice', 'always listen']:
+                start_continuous_voice_mode(assistant, chatbot)
+                continue
+            elif user_input.lower() in ['voice chat', 'interactive voice', 'voice conversation']:
+                start_interactive_voice_mode(assistant, chatbot)
+                continue
             
             # Determine if this is a conversation or automation task using NLP
             is_chat = chatbot.is_conversational_query(user_input)
@@ -1410,6 +1647,12 @@ def interactive_mode():
                 
                 response = chatbot.chat(user_input)
                 print(f"\n🤖 {response}")
+                
+                # Voice response if voice is enabled (after text is shown)
+                if assistant.voice_handler and assistant.voice_handler.is_available:
+                    print("🔊 [Speaking response...]")
+                    assistant.voice_handler.speak(response)
+                
                 print()
             else:
                 # Handle as automation task
@@ -1463,6 +1706,15 @@ def show_help():
 ║   • clear-chat   - Clear conversation history           ║
 ║   • quit         - Exit assistant                       ║
 ║                                                          ║
+║ 🎤 VOICE COMMANDS:                                       ║
+║   • voice        - Enable voice mode                    ║
+║   • voice off    - Disable voice mode                   ║
+║   • voice test   - Test voice setup                     ║
+║   • listen       - Listen for voice input once          ║
+║   • voice chat   - Interactive voice conversation       ║
+║   • always listen- Continuous voice mode                ║
+║   • voice status - Show voice capabilities              ║
+║                                                          ║
 ║ 💬 CONVERSATION:                                         ║
 ║   • Ask me anything! I can chat about any topic         ║
 ║   • "What's the weather like?"                          ║
@@ -1473,13 +1725,14 @@ def show_help():
 ║ ⚙️  CONFIGURATION:                                       ║
 ║   • config safe on/off      - Toggle safe mode         ║
 ║   • config confirm on/off   - Toggle confirmations     ║
+║   • config voice on/off     - Toggle voice mode        ║
 ║   • config show             - Show current config      ║
 ║                                                          ║
 ║ 💡 TIPS:                                                ║
 ║   • Be specific about what you want                     ║
 ║   • Use Ctrl+C to stop running tasks                    ║
 ║   • Screenshots are saved automatically                 ║
-║   • All actions are logged and confirmed               ║
+║   • Voice responses can be enabled/disabled             ║
 ║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
 """)
@@ -1533,6 +1786,239 @@ def analyze_screen(assistant: DesktopAssistant):
         print(f"❌ Error analyzing screen: {e}")
 
 
+def toggle_voice_mode(assistant: DesktopAssistant, enable: bool):
+    """Toggle voice mode on/off."""
+    assistant.config.voice_enabled = enable
+    
+    if enable:
+        if not VOICE_AVAILABLE:
+            print("❌ Voice libraries not installed. Install with: pip install SpeechRecognition pyttsx3 pyaudio")
+            return
+        
+        if not assistant.voice_handler:
+            print("🔊 Initializing voice handler...")
+            assistant.voice_handler = VoiceHandler(assistant.config)
+        
+        if assistant.voice_handler.is_available:
+            print("✅ Voice mode enabled! You can now use voice commands.")
+            assistant.voice_handler.speak("Voice mode enabled. How can I help you?")
+        else:
+            print("❌ Voice initialization failed")
+    else:
+        print("🔇 Voice mode disabled")
+        assistant.voice_handler = None
+
+
+def test_voice_setup(assistant: DesktopAssistant):
+    """Test voice recognition and TTS setup."""
+    if not VOICE_AVAILABLE:
+        print("❌ Voice libraries not installed")
+        return
+    
+    if not assistant.voice_handler:
+        print("🔊 Initializing voice handler for testing...")
+        temp_handler = VoiceHandler(assistant.config)
+    else:
+        temp_handler = assistant.voice_handler
+    
+    success = temp_handler.test_voice_setup()
+    
+    if success:
+        print("✅ Voice setup test completed successfully!")
+    else:
+        print("❌ Voice setup test failed. Check your microphone and speakers.")
+
+
+def start_continuous_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
+    """Start continuous voice listening mode."""
+    # Auto-enable voice if not available
+    if not assistant.voice_handler or not assistant.voice_handler.is_available:
+        print("🔊 Enabling voice mode for continuous listening...")
+        toggle_voice_mode(assistant, True)
+        if not assistant.voice_handler or not assistant.voice_handler.is_available:
+            print("❌ Failed to enable voice mode. Check your microphone and speakers.")
+            return
+    
+    print("\n🎤 Continuous Voice Mode Activated!")
+    print("═" * 60)
+    print("🗣️  Just speak naturally - I'm always listening")
+    print("🔇 Say 'stop listening' or 'quit voice' to exit")
+    print("⏸️  Press Ctrl+C to return to text mode")
+    print("═" * 60)
+    print()
+    
+    assistant.voice_handler.speak("Continuous voice mode activated. I'm listening for your commands.")
+    
+    def voice_callback(text):
+        """Process voice input in continuous mode."""
+        print(f"🗣️ You: {text}")
+        
+        # Check for exit commands
+        exit_phrases = ['stop listening', 'quit voice', 'exit voice', 'disable voice', 'voice off']
+        if any(phrase in text.lower() for phrase in exit_phrases):
+            assistant.voice_handler.stop_continuous_listening()
+            assistant.voice_handler.speak("Voice mode disabled. Returning to text mode.")
+            return
+        
+        # Process the voice input
+        is_chat = chatbot.is_conversational_query(text)
+        
+        if is_chat:
+            print("💬 Processing...")
+            response = chatbot.chat(text)
+            print(f"🤖 Assistant: {response}")
+            # Voice after text is shown
+            assistant.voice_handler.speak(response)
+        else:
+            print("🚀 Executing...")
+            assistant.voice_handler.speak("Executing your request.")
+            
+            result = assistant.execute_task(text)
+            
+            if result["success"]:
+                success_msg = f"Task completed. {result['actions_completed']} actions performed."
+                print(f"✅ {success_msg}")
+                assistant.voice_handler.speak(success_msg)
+            else:
+                error_msg = f"Task failed: {result.get('error', 'Unknown error')}"
+                print(f"❌ {error_msg}")
+                assistant.voice_handler.speak(error_msg)
+        
+        print("─" * 30)
+    
+    try:
+        # Start continuous listening
+        assistant.voice_handler.start_continuous_listening(voice_callback)
+        
+        # Keep the main thread alive
+        import time
+        while assistant.voice_handler.is_listening:
+            time.sleep(0.1)
+            
+    except KeyboardInterrupt:
+        print("\n\n⏹️ Continuous voice mode interrupted")
+        assistant.voice_handler.stop_continuous_listening()
+    
+    print("🔇 Exited continuous voice mode\n")
+
+
+def start_interactive_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
+    """Start interactive voice chat mode with prompts."""
+    # Auto-enable voice if not available
+    if not assistant.voice_handler or not assistant.voice_handler.is_available:
+        print("🔊 Enabling voice mode for interactive chat...")
+        toggle_voice_mode(assistant, True)
+        if not assistant.voice_handler or not assistant.voice_handler.is_available:
+            print("❌ Failed to enable voice mode. Check your microphone and speakers.")
+            return
+    
+    print("\n🎤 Interactive Voice Chat Mode!")
+    print("═" * 50)
+    print("🗣️  I'll ask for your input, then listen")
+    print("🔇 Say 'quit' or press Ctrl+C to exit")
+    print("═" * 50)
+    print()
+    
+    assistant.voice_handler.speak("Interactive voice chat started. Let's have a conversation!")
+    
+    try:
+        while True:
+            # Prompt for voice input
+            assistant.voice_handler.speak("What would you like to say?")
+            print("🎤 Your turn - speak now...")
+            
+            # Listen for input
+            text = assistant.voice_handler.listen_once(timeout=15)
+            
+            if not text:
+                assistant.voice_handler.speak("I didn't hear anything. Let's try again.")
+                continue
+            
+            print(f"🗣️ You said: {text}")
+            
+            # Check for exit
+            if any(word in text.lower() for word in ['quit', 'exit', 'stop', 'goodbye', 'bye']):
+                assistant.voice_handler.speak("Goodbye! It was nice talking with you.")
+                break
+            
+            # Process input
+            is_chat = chatbot.is_conversational_query(text)
+            
+            if is_chat:
+                response = chatbot.chat(text)
+                print(f"🤖 Assistant: {response}")
+                # Voice after text is shown
+                assistant.voice_handler.speak(response)
+            else:
+                print("🚀 Executing task...")
+                assistant.voice_handler.speak("I'll execute that task for you.")
+                
+                result = assistant.execute_task(text)
+                
+                if result["success"]:
+                    success_msg = f"Done! {result['actions_completed']} actions completed."
+                    print(f"✅ {success_msg}")
+                    assistant.voice_handler.speak(success_msg)
+                else:
+                    error_msg = f"Sorry, that didn't work: {result.get('error', 'Unknown error')}"
+                    print(f"❌ {error_msg}")
+                    assistant.voice_handler.speak(error_msg)
+            
+            print("─" * 30)
+            
+    except KeyboardInterrupt:
+        print("\n\n👋 Interactive voice chat interrupted")
+        assistant.voice_handler.speak("Chat interrupted. Goodbye!")
+    
+    print("🔇 Exited interactive voice mode\n")
+
+
+def handle_voice_input(assistant: DesktopAssistant, chatbot: ChatBot):
+    """Handle a single voice input and process it."""
+    if not assistant.voice_handler or not assistant.voice_handler.is_available:
+        print("❌ Voice mode not available. Type 'voice' to enable it.")
+        return
+    
+    print("\n🎤 Voice input mode activated")
+    print("─" * 40)
+    
+    # Listen for voice input
+    text = assistant.voice_handler.listen_once()
+    
+    if text:
+        print(f"🗣️ Voice input: {text}")
+        
+        # Process the voice input like regular text input
+        is_chat = chatbot.is_conversational_query(text)
+        
+        if is_chat:
+            # Handle as conversation
+            print(f"\n💬 Processing conversation...")
+            response = chatbot.chat(text)
+            print(f"🤖 {response}")
+            assistant.voice_handler.speak(response)
+        else:
+            # Handle as automation task
+            print(f"\n🚀 Executing automation task...")
+            assistant.voice_handler.speak("Executing your request.")
+            
+            result = assistant.execute_task(text)
+            
+            if result["success"]:
+                success_msg = f"Task completed successfully. {result['actions_completed']} actions performed."
+                print(f"✅ {success_msg}")
+                assistant.voice_handler.speak(success_msg)
+            else:
+                error_msg = f"Task failed: {result.get('error', 'Unknown error')}"
+                print(f"❌ {error_msg}")
+                assistant.voice_handler.speak(error_msg)
+    else:
+        print("🔇 No voice input detected")
+    
+    print("─" * 40)
+    print()
+
+
 def handle_config_command(assistant: DesktopAssistant, command: str):
     """Handle configuration commands."""
     parts = command.split()
@@ -1571,6 +2057,24 @@ def handle_config_command(assistant: DesktopAssistant, command: str):
             print("⚠️  Action confirmation disabled")
         else:
             print("Usage: config confirm on/off")
+    
+    elif setting == 'voice':
+        if value in ['on', 'true', 'yes', 'enable']:
+            toggle_voice_mode(assistant, True)
+        elif value in ['off', 'false', 'no', 'disable']:
+            toggle_voice_mode(assistant, False)
+        elif value == 'status':
+            if assistant.voice_handler:
+                info = assistant.voice_handler.get_voice_info()
+                print(f"🎤 Voice Status: {'Available' if info['available'] else 'Not Available'}")
+                if info['available']:
+                    print(f"   Listening: {'Yes' if info['listening'] else 'No'}")
+                    print(f"   TTS Voices: {info.get('tts_voices', 'Unknown')}")
+                    print(f"   TTS Rate: {info.get('tts_rate', 'Unknown')} WPM")
+            else:
+                print("🔇 Voice mode disabled")
+        else:
+            print("Usage: config voice on/off/status")
     
     else:
         print(f"Unknown setting: {setting}")
