@@ -30,6 +30,20 @@ from dotenv import load_dotenv
 # Google AI imports
 import google.generativeai as genai
 
+# NLP and ML imports
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.naive_bayes import MultinomialNB
+    from sklearn.pipeline import Pipeline
+    import nltk
+    from nltk.corpus import stopwords
+    from nltk.tokenize import word_tokenize
+    from nltk.stem import WordNetLemmatizer
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    print("⚠️  NLP libraries not installed. Using basic keyword detection. Install with: pip install scikit-learn nltk")
+
 
 # =============================================================================
 # Configuration and Data Classes
@@ -49,16 +63,296 @@ class AssistantConfig:
 
 
 # =============================================================================
+# NLP Intent Classification
+# =============================================================================
+
+class IntentClassifier:
+    """NLP-based intent classifier to distinguish between chat and automation tasks."""
+    
+    def __init__(self):
+        self.model = None
+        self.vectorizer = None
+        self.is_trained = False
+        
+        if SKLEARN_AVAILABLE:
+            self._initialize_nltk()
+            self._train_classifier()
+        else:
+            print("🔄 Using fallback keyword-based detection (install scikit-learn for better accuracy)")
+    
+    def _initialize_nltk(self):
+        """Initialize NLTK resources."""
+        try:
+            import ssl
+            try:
+                _create_unverified_https_context = ssl._create_unverified_context
+            except AttributeError:
+                pass
+            else:
+                ssl._create_default_https_context = _create_unverified_https_context
+            
+            nltk.download('punkt', quiet=True)
+            nltk.download('stopwords', quiet=True)
+            nltk.download('wordnet', quiet=True)
+            nltk.download('omw-1.4', quiet=True)
+        except Exception as e:
+            print(f"⚠️  NLTK setup warning: {e}")
+    
+    def _preprocess_text(self, text):
+        """Preprocess text for classification."""
+        try:
+            # Tokenize and clean
+            tokens = word_tokenize(text.lower())
+            
+            # Remove stopwords
+            stop_words = set(stopwords.words('english'))
+            filtered_tokens = [w for w in tokens if w not in stop_words and w.isalpha()]
+            
+            # Lemmatize
+            lemmatizer = WordNetLemmatizer()
+            lemmatized = [lemmatizer.lemmatize(token) for token in filtered_tokens]
+            
+            return ' '.join(lemmatized)
+        except Exception:
+            # Fallback to simple preprocessing
+            return text.lower().strip()
+    
+    def _train_classifier(self):
+        """Train the intent classification model."""
+        try:
+            # Training data: (text, label) where 0=automation, 1=conversation
+            training_data = [
+                # Automation tasks (0)
+                ("open chrome browser", 0),
+                ("click on the button", 0),
+                ("type hello world", 0),
+                ("press enter key", 0),
+                ("scroll down page", 0),
+                ("launch notepad application", 0),
+                ("close window", 0),
+                ("minimize application", 0),
+                ("take screenshot", 0),
+                ("open file explorer", 0),
+                ("start calculator", 0),
+                ("run program", 0),
+                ("navigate to website", 0),
+                ("download file", 0),
+                ("save document", 0),
+                ("copy text", 0),
+                ("paste clipboard", 0),
+                ("delete file", 0),
+                ("install software", 0),
+                ("update application", 0),
+                ("switch to tab", 0),
+                ("maximize window", 0),
+                ("drag and drop", 0),
+                ("select all text", 0),
+                ("go to url", 0),
+                ("open edge", 0),
+                ("start spotify", 0),
+                ("launch terminal", 0),
+                ("execute command", 0),
+                ("find text", 0),
+                ("can you open edge", 0),
+                ("can you open chrome", 0),
+                ("open edge for me", 0),
+                ("like can you open edge", 0),
+                ("please open chrome", 0),
+                ("launch notepad please", 0),
+                ("start calculator for me", 0),
+                ("can you click the button", 0),
+                ("please type this text", 0),
+                ("can you scroll down", 0),
+                ("help me open firefox", 0),
+                ("open the browser", 0),
+                ("start the application", 0),
+                ("run the program", 0),
+                ("execute this command", 0),
+                ("launch spotify app", 0),
+                ("open file manager", 0),
+                ("start windows explorer", 0),
+                
+                # Conversational queries (1)
+                ("hello", 1),
+                ("hi", 1),
+                ("hey", 1),
+                ("hello there", 1),
+                ("hi there", 1),
+                ("hey there", 1),
+                ("good morning", 1),
+                ("good afternoon", 1),
+                ("good evening", 1),
+                ("how are you", 1),
+                ("what is your name", 1),
+                ("tell me a joke", 1),
+                ("how do you work", 1),
+                ("what can you do", 1),
+                ("explain machine learning", 1),
+                ("what do you think about", 1),
+                ("are you intelligent", 1),
+                ("do you have feelings", 1),
+                ("thanks for helping", 1),
+                ("you are awesome", 1),
+                ("good job well done", 1),
+                ("i love you", 1),
+                ("how was your day", 1),
+                ("what is the weather", 1),
+                ("tell me about science", 1),
+                ("why is sky blue", 1),
+                ("what time is it", 1),
+                ("who invented computer", 1),
+                ("recommend a movie", 1),
+                ("i feel sad today", 1),
+                ("you make me happy", 1),
+                ("goodbye see you later", 1),
+                ("hi there", 1),
+                ("hey buddy", 1),
+                ("thank you so much", 1),
+                ("amazing work", 1),
+                ("that was great", 1),
+                ("i think you are", 1),
+                ("do you believe in", 1),
+                ("what is meaning of life", 1),
+                ("tell me story", 1),
+                ("sing a song", 1),
+                ("make me laugh", 1),
+                ("i need emotional support", 1),
+                ("you are my friend", 1),
+                ("how old are you", 1),
+                ("where are you from", 1),
+                ("what are your hobbies", 1),
+                ("do you dream", 1),
+                ("are you lonely", 1),
+                ("what makes you happy", 1),
+                ("hiii", 1),
+                ("yeppppp", 1),
+                ("yeahhh", 1),
+                ("niceee", 1),
+                ("coollll", 1),
+                ("can you help me with something", 1),
+                ("what do you think about this", 1),
+                ("i want to ask you something", 1),
+                ("are you there", 1),
+                ("how smart are you", 1),
+                ("do you understand me", 1),
+                ("can you perform a task for me", 1),  # This should be conversational!
+                ("what task can you do", 1),
+                ("what kind of tasks", 1),
+                ("can you do work for me", 1),
+                ("help me with a task", 1),
+                ("i need help with task", 1),
+                ("what automation can you do", 1),
+                ("like batman is the prime example", 1),
+                ("batman sacrificed everything", 1),
+                ("like in the movie", 1),
+                ("like the character", 1),
+                ("this reminds me of", 1),
+            ]
+            
+            # Separate texts and labels
+            texts = [self._preprocess_text(text) for text, label in training_data]
+            labels = [label for text, label in training_data]
+            
+            # Create and train the model
+            self.model = Pipeline([
+                ('tfidf', TfidfVectorizer(max_features=1000, ngram_range=(1, 2))),
+                ('classifier', MultinomialNB(alpha=0.1))
+            ])
+            
+            self.model.fit(texts, labels)
+            self.is_trained = True
+            
+            # Test accuracy on training data
+            accuracy = self.model.score(texts, labels)
+            print(f"🤖 NLP Intent Classifier trained with {accuracy:.2%} accuracy")
+            
+        except Exception as e:
+            print(f"⚠️  NLP training failed: {e}. Using fallback detection.")
+            self.is_trained = False
+    
+    def classify_intent(self, text: str) -> bool:
+        """
+        Classify if text is conversational (True) or automation task (False).
+        Uses NLP if available, otherwise falls back to keyword detection.
+        """
+        if not text.strip():
+            return True  # Empty text is conversational
+        
+        if SKLEARN_AVAILABLE and self.is_trained:
+            try:
+                processed_text = self._preprocess_text(text)
+                prediction = self.model.predict([processed_text])[0]
+                probabilities = self.model.predict_proba([processed_text])[0]
+                
+                # Get confidence scores
+                automation_confidence = probabilities[0]
+                conversation_confidence = probabilities[1]
+                max_confidence = max(automation_confidence, conversation_confidence)
+                
+                # Apply confidence threshold - if confidence is too low, default to conversation
+                CONFIDENCE_THRESHOLD = 0.7  # 70% confidence required
+                
+                if max_confidence < CONFIDENCE_THRESHOLD:
+                    print(f"🤔 NLP Classification: 💬 CONVERSATION (low confidence: {max_confidence:.2%}, defaulting to chat)")
+                    return True  # Default to conversation for ambiguous cases
+                
+                # Log the decision for debugging
+                intent_type = "💬 CONVERSATION" if prediction == 1 else "🚀 AUTOMATION"
+                print(f"🧠 NLP Classification: {intent_type} (confidence: {max_confidence:.2%})")
+                
+                return prediction == 1  # 1 = conversation, 0 = automation
+                
+            except Exception as e:
+                print(f"⚠️  NLP classification failed: {e}. Using fallback.")
+                return self._fallback_detection(text)
+        else:
+            return self._fallback_detection(text)
+    
+    def _fallback_detection(self, text: str) -> bool:
+        """Fallback keyword-based detection when NLP is not available."""
+        text_lower = text.lower().strip()
+        
+        # Clear automation commands
+        automation_patterns = [
+            'open ', 'launch ', 'start ', 'run ', 'execute ',
+            'click', 'press ', 'type ', 'scroll', 'drag',
+            'close ', 'minimize ', 'maximize ', 'switch to',
+            'go to', 'navigate', 'download', 'save', 'delete',
+            'copy', 'paste', 'install', 'screenshot'
+        ]
+        
+        for pattern in automation_patterns:
+            if pattern in text_lower:
+                return False
+        
+        # Clear conversational patterns
+        conversational_patterns = [
+            text_lower in ['hi', 'hello', 'hey', 'thanks', 'bye'],
+            text_lower.startswith(('what', 'how', 'why', 'who', 'when', 'where')),
+            '?' in text,
+            any(phrase in text_lower for phrase in [
+                'tell me', 'explain', 'you are', 'i am', 'i feel',
+                'love you', 'thank you', 'good job', 'awesome'
+            ])
+        ]
+        
+        return any(conversational_patterns)
+
+
+# =============================================================================
 # Core Classes
 # =============================================================================
 
 class GeminiClient:
     """Client for interacting with Google's Gemini AI API."""
     PREFERRED_MODELS = [
-        'gemini-2.0-flash-exp',
-        'gemini-1.5-flash',
-        'gemini-1.5-flash-8b',
-        'gemini-1.5-pro',
+        # Prioritize models less likely to hit quota limits
+        'gemini-1.5-flash',        # Stable, widely available
+        'gemini-1.5-flash-8b',     # Lightweight, good for quotas  
+        'gemini-1.5-pro',          # Reliable fallback
+        'gemini-2.0-flash',        # Newer but more stable than exp
+        'gemini-2.0-flash-exp',    # Experimental, likely to hit limits
+        'gemini-2.5-flash',        # Latest but may have quota issues
     ]
 
     def __init__(self, api_key: Optional[str] = None, config: Optional[AssistantConfig] = None):
@@ -67,33 +361,73 @@ class GeminiClient:
             raise ValueError("Google AI API key is required")
         self.config = config or AssistantConfig()
         genai.configure(api_key=self.api_key)
-        chosen = self._select_model(self.config.model_name)
+        chosen = self._select_model_with_fallback(self.config.model_name)
         logging.info(f"Using Gemini model: {chosen}")
         self.model = genai.GenerativeModel(chosen)
 
-    def _select_model(self, requested: str) -> str:
-        """Select model based on request or auto preference order."""
+    def _select_model_with_fallback(self, requested: str) -> str:
+        """Select model with intelligent fallback and quota awareness."""
         try:
             models = list(genai.list_models())
             model_names = {m.name.split('/')[-1]: m for m in models}
         except Exception as e:
-            logging.warning(f"Could not list models ({e}); falling back to default")
-            return self.PREFERRED_MODELS[0]
+            logging.warning(f"Could not list models ({e}); using fallback")
+            return 'gemini-1.5-flash'  # Most reliable fallback
 
-        if requested != 'auto':
-            # Accept direct if available, else warn and fallback
-            if requested in model_names:
-                return requested
-            logging.warning(f"Requested model '{requested}' not available; falling back to auto selection")
-        for candidate in self.PREFERRED_MODELS:
-            if candidate in model_names:
-                return candidate
-        # Fallback: pick any text capable model
-        for name in model_names:
-            if 'flash' in name or 'pro' in name:
-                return name
-        # Last resort
-        return self.PREFERRED_MODELS[0]
+        # If specific model requested and available, use it
+        if requested != 'auto' and requested in model_names:
+            return requested
+
+        # Auto selection with quota-aware prioritization
+        if requested == 'auto':
+            print("🧠 Smart model selection: Testing models for availability...")
+            
+            # Try each preferred model and test if it works
+            for candidate in self.PREFERRED_MODELS:
+                if candidate in model_names:
+                    if self._test_model_availability(candidate):
+                        print(f"✅ Selected working model: {candidate}")
+                        return candidate
+                    else:
+                        print(f"⚠️  {candidate} unavailable (likely quota exceeded)")
+            
+            # If all preferred models fail, try any available model
+            print("🔍 Trying alternative models...")
+            for name in model_names:
+                if any(keyword in name for keyword in ['flash', 'pro']) and name not in self.PREFERRED_MODELS:
+                    if self._test_model_availability(name):
+                        print(f"✅ Found working alternative: {name}")
+                        return name
+        
+        # Fallback to most reliable model
+        print("⚠️  Using fallback model (may have limited availability)")
+        return 'gemini-1.5-flash'
+    
+    def _test_model_availability(self, model_name: str) -> bool:
+        """Test if a model is currently available (not hitting quota limits)."""
+        try:
+            # Create a temporary model instance to test
+            test_model = genai.GenerativeModel(model_name)
+            
+            # Try a simple generation request
+            response = test_model.generate_content("Hi", 
+                generation_config=genai.types.GenerationConfig(max_output_tokens=1))
+            
+            return True  # If we get here, model is working
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            if '429' in error_msg or 'quota' in error_msg or 'rate' in error_msg:
+                return False  # Quota exceeded
+            elif 'not found' in error_msg or 'unavailable' in error_msg:
+                return False  # Model not available
+            else:
+                # Other errors might be temporary, assume model is available
+                return True
+
+    def _select_model(self, requested: str) -> str:
+        """Legacy method - kept for compatibility."""
+        return self._select_model_with_fallback(requested)
 
     @staticmethod
     def list_available_models() -> List[str]:
@@ -421,6 +755,121 @@ class GUIAutomator:
         })
         if len(self.action_history) > 100:
             self.action_history.pop(0)
+
+
+class ChatBot:
+    """Conversational chatbot using Gemini AI for natural language interactions."""
+    
+    def __init__(self, gemini_client: GeminiClient):
+        self.gemini_client = gemini_client
+        self.conversation_history = []
+        self.max_history_length = 20  # Keep last 20 exchanges
+        self.intent_classifier = IntentClassifier()  # NLP-based classifier
+        
+        # System prompt for the chatbot personality
+        self.system_prompt = """You are a helpful and friendly AI assistant integrated into a desktop automation tool. 
+        You can have natural conversations about any topic while also being aware that you're part of a system 
+        that can perform desktop automation tasks.
+        
+        When users ask general questions, provide helpful and engaging responses. 
+        
+        When users ask about your capabilities or what tasks you can perform, explain that you can:
+        1. Have natural conversations on any topic
+        2. Perform desktop automation tasks like:
+           - Opening applications (browsers, notepad, calculator, etc.)
+           - Clicking buttons and UI elements
+           - Typing text and pressing keys
+           - Taking screenshots and analyzing screens
+           - Navigating websites and software
+           
+        If someone asks "can you perform a task for me?" or similar, respond conversationally by asking 
+        what specific task they have in mind, rather than immediately trying to automate something.
+        
+        Be friendly, helpful, and engaging in all interactions."""
+        
+    def chat(self, user_message: str) -> str:
+        """Process a conversational message and return a response."""
+        try:
+            # Add user message to history
+            self.conversation_history.append({
+                "role": "user",
+                "content": user_message,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Build conversation context
+            context = self._build_conversation_context()
+            
+            # Generate response using Gemini
+            response = self.gemini_client.model.generate_content(context)
+            
+            if response and response.text:
+                bot_response = response.text.strip()
+                
+                # Add bot response to history
+                self.conversation_history.append({
+                    "role": "assistant", 
+                    "content": bot_response,
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                # Trim history if too long
+                self._trim_history()
+                
+                return bot_response
+            else:
+                return "I'm sorry, I couldn't generate a response right now. Please try again."
+                
+        except Exception as e:
+            logging.error(f"Chat error: {e}")
+            return f"I encountered an error: {str(e)}"
+    
+    def _build_conversation_context(self) -> str:
+        """Build the conversation context for Gemini."""
+        context_parts = [self.system_prompt, "\n\nConversation History:"]
+        
+        # Add recent conversation history
+        for entry in self.conversation_history[-10:]:  # Last 10 exchanges
+            role = "Human" if entry["role"] == "user" else "Assistant"
+            context_parts.append(f"{role}: {entry['content']}")
+        
+        # Add current conversation marker
+        if self.conversation_history:
+            context_parts.append("\nAssistant:")
+        
+        return "\n".join(context_parts)
+    
+    def _trim_history(self):
+        """Keep conversation history within limits."""
+        if len(self.conversation_history) > self.max_history_length * 2:  # *2 for user+assistant pairs
+            # Remove oldest pairs, keeping system prompt effectiveness
+            self.conversation_history = self.conversation_history[-(self.max_history_length * 2):]
+    
+    def clear_history(self):
+        """Clear the conversation history."""
+        self.conversation_history.clear()
+        
+    def get_history_summary(self) -> str:
+        """Get a summary of conversation history."""
+        if not self.conversation_history:
+            return "No conversation history yet."
+            
+        total_messages = len(self.conversation_history)
+        user_messages = len([msg for msg in self.conversation_history if msg["role"] == "user"])
+        
+        if self.conversation_history:
+            first_msg_time = datetime.fromisoformat(self.conversation_history[0]["timestamp"])
+            last_msg_time = datetime.fromisoformat(self.conversation_history[-1]["timestamp"])
+            duration = last_msg_time - first_msg_time
+            
+            return f"Conversation: {user_messages} exchanges, {total_messages} total messages, " \
+                   f"duration: {duration.total_seconds():.0f}s"
+        
+        return f"Conversation: {user_messages} exchanges, {total_messages} total messages"
+    
+    def is_conversational_query(self, text: str) -> bool:
+        """Determine if text is a conversational query vs desktop automation command using NLP."""
+        return self.intent_classifier.classify_intent(text)
 
 
 class DesktopAssistant:
@@ -861,23 +1310,45 @@ def interactive_mode():
     print("║ 🤖 AI-powered desktop automation                          ║")
     print("║ 📸 Visual screen understanding                            ║")
     print("║ 🔒 Safe operation with confirmations                      ║")
+    print("║ 💬 Natural language conversation support                  ║")
     print("╚══════════════════════════════════════════════════════════╝")
     print()
     print("Type your tasks in natural language or use these commands:")
     print("• 'help' - Show available commands")
     print("• 'analyze' - Analyze current screen")
     print("• 'status' - Show assistant status")
+    print("• 'chat-history' - Show conversation history")
+    print("• 'clear-chat' - Clear conversation history")
     print("• 'quit' - Exit the assistant")
+    print()
+    print("💡 Tip: I can handle both automation tasks and general conversation!")
+    print("   Ask me anything or tell me what you want to do on your computer.")
     print()
     
     # Load configuration
-    # Preload available models (ignore failures silently)
+    # Ensure environment is loaded and API key is available
+    load_environment()
+    
+    # Preload available models (now with proper API key)
     try:
-        available = GeminiClient.list_available_models()
-    except Exception:
+        # Configure genai with API key first
+        api_key = os.getenv('GOOGLE_AI_API_KEY')
+        if api_key:
+            genai.configure(api_key=api_key)
+            available = GeminiClient.list_available_models()
+        else:
+            available = []
+    except Exception as e:
+        print(f"⚠️  Could not load models: {e}")
         available = []
+        
     default_model = 'auto'
-    print(f"Available models: {', '.join(available) if available else 'unknown (API list failed)'}")
+    if available:
+        print(f"🎯 Available models: {', '.join(available)}")
+        print(f"🌟 Recommended: {available[0] if available else 'gemini-1.5-flash'}")
+    else:
+        print("📋 Available models: Will be auto-selected")
+        
     chosen = input(f"Choose model (or press Enter for {default_model}): ").strip() or default_model
     config = AssistantConfig(
         safe_mode=False,
@@ -886,11 +1357,13 @@ def interactive_mode():
         model_name=chosen
     )
     
-    # Initialize assistant
+    # Initialize assistant and chatbot
     try:
         print("🔄 Initializing assistant...")
         assistant = DesktopAssistant(config)
+        chatbot = ChatBot(assistant.gemini_client)
         print(f"✅ Assistant ready! (Safe Mode: {'ON' if config.safe_mode else 'OFF'})")
+        print("✅ Chatbot ready! You can have conversations or automate tasks.")
         print()
     except Exception as e:
         print(f"❌ Failed to initialize assistant: {e}")
@@ -916,29 +1389,48 @@ def interactive_mode():
             elif user_input.lower() == 'analyze':
                 analyze_screen(assistant)
                 continue
+            elif user_input.lower() in ['chat-history', 'history']:
+                print(f"📜 {chatbot.get_history_summary()}")
+                continue
+            elif user_input.lower() in ['clear-chat', 'clear-history']:
+                chatbot.clear_history()
+                print("🧹 Conversation history cleared!")
+                continue
             elif user_input.lower().startswith('config'):
                 handle_config_command(assistant, user_input)
                 continue
             
-            # Execute task
-            print(f"\n🚀 Executing: {user_input}")
-            print("─" * 60)
+            # Determine if this is a conversation or automation task using NLP
+            is_chat = chatbot.is_conversational_query(user_input)
             
-            result = assistant.execute_task(user_input)
-            
-            # Show results
-            print("\n" + "═"*60)
-            if result["success"]:
-                print(f"✅ SUCCESS - Task completed!")
-                print(f"   Actions: {result['actions_completed']}/{result['total_actions']}")
-            else:
-                print(f"❌ FAILED - {result.get('error', 'Unknown error')}")
-                print(f"   Actions completed: {result['actions_completed']}")
+            if is_chat:
+                # Handle as conversation
+                print(f"\n💬 Chatting: {user_input}")
+                print("─" * 60)
                 
-                if result.get("safety_concerns"):
-                    print(f"⚠️  Safety concerns: {', '.join(result['safety_concerns'])}")
-            print("═"*60)
-            print()
+                response = chatbot.chat(user_input)
+                print(f"\n🤖 {response}")
+                print()
+            else:
+                # Handle as automation task
+                print(f"\n🚀 Executing: {user_input}")
+                print("─" * 60)
+                
+                result = assistant.execute_task(user_input)
+                
+                # Show results
+                print("\n" + "═"*60)
+                if result["success"]:
+                    print(f"✅ SUCCESS - Task completed!")
+                    print(f"   Actions: {result['actions_completed']}/{result['total_actions']}")
+                else:
+                    print(f"❌ FAILED - {result.get('error', 'Unknown error')}")
+                    print(f"   Actions completed: {result['actions_completed']}")
+                    
+                    if result.get("safety_concerns"):
+                        print(f"⚠️  Safety concerns: {', '.join(result['safety_concerns'])}")
+                print("═"*60)
+                print()
             
         except KeyboardInterrupt:
             print("\n\n🛑 Task interrupted by user")
@@ -964,10 +1456,19 @@ def show_help():
 ║   • "Scroll down 3 times"                               ║
 ║                                                          ║
 ║ 🔧 CONTROL COMMANDS:                                     ║
-║   • help     - Show this help                           ║
-║   • status   - Show assistant status                    ║
-║   • analyze  - Analyze current screen                   ║
-║   • quit     - Exit assistant                           ║
+║   • help         - Show this help                       ║
+║   • status       - Show assistant status                ║
+║   • analyze      - Analyze current screen               ║
+║   • chat-history - Show conversation history            ║
+║   • clear-chat   - Clear conversation history           ║
+║   • quit         - Exit assistant                       ║
+║                                                          ║
+║ 💬 CONVERSATION:                                         ║
+║   • Ask me anything! I can chat about any topic         ║
+║   • "What's the weather like?"                          ║
+║   • "Tell me a joke"                                    ║
+║   • "How do neural networks work?"                      ║
+║   • "What do you think about..."                        ║
 ║                                                          ║
 ║ ⚙️  CONFIGURATION:                                       ║
 ║   • config safe on/off      - Toggle safe mode         ║
