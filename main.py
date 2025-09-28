@@ -86,6 +86,14 @@ except ImportError:
     VOICE_AVAILABLE = False
     print("Warning: Voice libraries not installed. Voice mode disabled. Install with: pip install SpeechRecognition pyttsx3 pyaudio")
 
+# OS Detection import
+try:
+    from os_detection import get_os_context, get_os_commands, os_detector
+    OS_DETECTION_AVAILABLE = True
+except ImportError:
+    OS_DETECTION_AVAILABLE = False
+    print("Warning: OS detection not available")
+
 
 # =============================================================================
 # Configuration and Data Classes
@@ -494,21 +502,45 @@ class GeminiClient:
     def analyze_screenshot(self, image: Image.Image, task_description: str) -> Dict[str, Any]:
         """Analyze a screenshot and provide action recommendations."""
         try:
+            # Get OS-specific context and commands
+            os_context = ""
+            os_commands = {}
+            if OS_DETECTION_AVAILABLE:
+                try:
+                    os_context = f"\nSYSTEM ENVIRONMENT: {get_os_context()}\n"
+                    os_commands = get_os_commands()
+                    
+                    # Add OS-specific instructions
+                    if os_detector.os_info['is_windows']:
+                        os_context += "- Use Windows UI elements: Start menu, taskbar, Windows applications\n"
+                        os_context += "- File paths use backslashes (\\) \n"
+                        os_context += "- Key combinations like Ctrl+L must be written as 'ctrl+l'\n"
+                    elif os_detector.os_info['is_macos']:
+                        os_context += "- Use macOS UI elements: Dock, Launchpad, Applications folder\n"
+                        os_context += "- File paths use forward slashes (/)\n"
+                        os_context += "- Key combinations use Cmd instead of Ctrl (e.g., 'cmd+l')\n"
+                    elif os_detector.os_info['is_linux']:
+                        os_context += "- Use Linux desktop environment elements\n"
+                        os_context += "- File paths use forward slashes (/)\n"
+                        os_context += "- Key combinations typically use Ctrl\n"
+                except Exception as e:
+                    os_context = ""
+            
             prompt = f"""
 You are a desktop assistant AI that can see and understand computer screens.
 
 TASK: {task_description}
-
+{os_context}
 CRITICAL INSTRUCTIONS:
 - NEVER type terminal/command line commands
 - NEVER use "edge website.com" command syntax  
-- Use Windows UI elements: Start menu, taskbar, applications
-- Key combinations like Ctrl+L must be written as "ctrl+l" (NOT separate keys)
+- Use appropriate UI elements for this operating system
+- Key combinations must be written in lowercase with + (e.g., "ctrl+l")
 
 TASK CLASSIFICATION:
-- System/App tasks (settings, updates, calculator, notepad, word, excel) → Open Windows apps directly
+- System/App tasks (settings, updates, calculator, notepad, office apps) → Open applications directly
 - Website tasks (go to website.com, visit site.org, chatgpt.com) → Open browser first, then navigate
-- Browser tasks (open chrome, open edge) → Open browser app only
+- Browser tasks (open chrome, open edge, open firefox) → Open browser app only
 
 For SYSTEM/APP tasks like "settings", "updates", "calculator", "notepad":
 1. Press "win" key (opens Start menu)  
@@ -821,10 +853,18 @@ class ChatBot:
         self.max_history_length = 20  # Keep last 20 exchanges
         self.intent_classifier = IntentClassifier()  # NLP-based classifier
         
-        # System prompt for the chatbot personality
-        self.system_prompt = """You are a helpful and friendly AI assistant integrated into Truvo, a desktop automation tool. 
+        # System prompt for the chatbot personality with OS context
+        os_context = ""
+        if OS_DETECTION_AVAILABLE:
+            try:
+                os_context = f"\n\nSYSTEM ENVIRONMENT: {get_os_context()}\n"
+                os_context += "IMPORTANT: When providing commands, file paths, or technical instructions, use the appropriate format for this operating system.\n"
+            except Exception as e:
+                os_context = ""
+        
+        self.system_prompt = f"""You are a helpful and friendly AI assistant integrated into Truvo, a desktop automation tool. 
         You can have natural conversations about any topic while also being aware that you're part of a system 
-        that can perform desktop automation tasks.
+        that can perform desktop automation tasks.{os_context}
         
         When users ask general questions, provide helpful and engaging responses. 
         
