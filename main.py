@@ -10,6 +10,9 @@ understand, and interact with your desktop environment through natural language 
 import os
 import warnings
 import logging as default_logging
+import re
+import json
+from typing import Dict, List, Any, Optional, Tuple
 
 # Multiple layers of Google library warning suppression
 os.environ['GRPC_VERBOSITY'] = 'ERROR'
@@ -93,6 +96,14 @@ try:
 except ImportError:
     OS_DETECTION_AVAILABLE = False
     print("Warning: OS detection not available")
+
+# Data Retrieval import
+try:
+    from data_retrieval import data_retriever, retrieve_data, scrape_web, execute_command, search_web, get_weather
+    DATA_RETRIEVAL_AVAILABLE = True
+except ImportError:
+    DATA_RETRIEVAL_AVAILABLE = False
+    print("Warning: Data retrieval not available")
 
 
 # =============================================================================
@@ -852,6 +863,12 @@ class ChatBot:
         self.conversation_history = []
         self.max_history_length = 20  # Keep last 20 exchanges
         self.intent_classifier = IntentClassifier()  # NLP-based classifier
+        self._pending_search_query = None  # Store pending browser searches
+        
+        # Initialize data retrieval capabilities
+        self.data_retrieval_available = DATA_RETRIEVAL_AVAILABLE
+        if self.data_retrieval_available:
+            self.data_retriever = data_retriever
         
         # System prompt for the chatbot personality with OS context
         os_context = ""
@@ -876,15 +893,58 @@ class ChatBot:
            - Typing text and pressing keys
            - Taking screenshots and analyzing screens
            - Navigating websites and software
+        3. Retrieve real-time data including:
+           - Web scraping from websites
+           - Executing system commands safely
+           - Getting weather information
+           - Searching the web for information
+           - Reading news articles
            
         If someone asks "can you perform a task for me?" or similar, respond conversationally by asking 
         what specific task they have in mind, rather than immediately trying to automate something.
         
         Be friendly, helpful, and engaging in all interactions."""
         
+    def _handle_browser_request(self, user_message: str) -> str:
+        """Handle user request to open browser."""
+        # Check if user is agreeing to open browser
+        agreement_words = ['yes', 'yeah', 'ok', 'okay', 'sure', 'go ahead', 'do it', 'open it', 'search it', 'please']
+        user_lower = user_message.lower().strip()
+        
+        if any(word in user_lower for word in agreement_words) and len(user_lower) < 20:  # Short responses only
+            # Look for pending search query in recent conversation history
+            search_query = None
+            for message in reversed(self.conversation_history[-3:]):  # Check last 3 messages
+                if message.get('role') == 'assistant':
+                    content = message.get('content', '')
+                    if 'BROWSER_SEARCH_PENDING:' in content:
+                        # Extract the search query
+                        parts = content.split('BROWSER_SEARCH_PENDING:')
+                        if len(parts) > 1:
+                            search_query = parts[1].strip()
+                            break
+            
+            if search_query:
+                # Open browser
+                if self.data_retriever:
+                    browser_opened = self.data_retriever.open_browser_search(search_query)
+                    if browser_opened:
+                        return f"Great! I've opened your browser and searched for '{search_query}'. You should see the results now."
+                    else:
+                        return f"Sorry, I couldn't open the browser automatically. Please search for '{search_query}' manually."
+                else:
+                    return f"Please search for '{search_query}' manually in your browser."
+        
+        return ""  # Not a browser request
+
     def chat(self, user_message: str) -> str:
         """Process a conversational message and return a response."""
         try:
+            # Check if this is a response to a browser suggestion first
+            browser_response = self._handle_browser_request(user_message)
+            if browser_response:
+                return browser_response
+            
             # Add user message to history
             self.conversation_history.append({
                 "role": "user",
@@ -895,6 +955,15 @@ class ChatBot:
             # Build conversation context
             context = self._build_conversation_context()
             
+            # Check if user query needs data retrieval
+            retrieval_context = ""
+            if self.data_retrieval_available:
+                retrieval_context = self._handle_data_retrieval(user_message)
+            
+            # Add retrieval context to the prompt if available
+            if retrieval_context:
+                context += f"\n\nREAL-TIME DATA CONTEXT:\n{retrieval_context}\n"
+            
             # Generate response using Gemini
             with suppress_stderr():
                 response = self.gemini_client.model.generate_content(context)
@@ -902,10 +971,15 @@ class ChatBot:
             if response and response.text:
                 bot_response = response.text.strip()
                 
-                # Add bot response to history
+                # Clean up any hidden markers from the response
+                if 'BROWSER_SEARCH_PENDING:' in bot_response:
+                    bot_response = bot_response.split('BROWSER_SEARCH_PENDING:')[0].strip()
+                
+                # Add bot response to history (store both context and clean response)
                 self.conversation_history.append({
                     "role": "assistant", 
-                    "content": bot_response,
+                    "content": context if 'BROWSER_SEARCH_PENDING:' in context else bot_response,  # Store context if it has markers
+                    "response": bot_response,  # Always store clean response
                     "timestamp": datetime.now().isoformat()
                 })
                 
@@ -966,6 +1040,237 @@ class ChatBot:
     def is_conversational_query(self, text: str) -> bool:
         """Determine if text is a conversational query vs desktop automation command using NLP."""
         return self.intent_classifier.classify_intent(text)
+    
+    def _handle_data_retrieval(self, user_message: str) -> str:
+        """Handle data retrieval requests and return context for AI."""
+        retrieval_keywords = [
+            'weather', 'news', 'google', 'search', 'find', 'look up', 
+            'check', 'what is', 'who is', 'when is', 'where is',
+            'scrape', 'get data', 'retrieve', 'fetch', 'command', 'run',
+            'cricket', 'match', 'score', 'live', 'playing', 'game', 'sport'
+        ]
+        
+        message_lower = user_message.lower()
+        
+        # Check if the message contains retrieval keywords
+        needs_retrieval = any(keyword in message_lower for keyword in retrieval_keywords)
+        
+        if not needs_retrieval:
+            return ""
+        
+        try:
+            # Determine what kind of data retrieval is needed
+            retrieval_result = None
+            
+            # Sports queries - prioritize these for real-time data
+            if any(sport in message_lower for sport in ['cricket', 'match', 'score', 'live', 'playing', 'game', 'vs']):
+                # Enhanced sports query detection
+                if 'india' in message_lower or 'pakistan' in message_lower or 'australia' in message_lower:
+                    sports_query = user_message + " live cricket score today"
+                else:
+                    sports_query = user_message + " live score"
+                retrieval_result = self.data_retriever.retrieve_data(sports_query, "api")
+            
+            # Weather queries - improved detection
+            elif re.search(r'\b(weather|temperature|forecast|climate)\b', message_lower):
+                # Try to extract location
+                location_patterns = [
+                    r'weather.*?(?:in|for|at)\s+([a-zA-Z\s,]+?)(?:\s|$|\?)',
+                    r'(?:get|check).*?weather.*?([a-zA-Z\s,]+?)(?:\s|$|\?)',
+                    r'weather.*?([a-zA-Z\s,]+?)(?:\s|$|\?)'
+                ]
+                
+                location = ""
+                for pattern in location_patterns:
+                    match = re.search(pattern, message_lower)
+                    if match:
+                        potential_location = match.group(1).strip()
+                        # Filter out common non-location words
+                        if len(potential_location) > 2 and not any(word in potential_location for word in ['like', 'today', 'tomorrow', 'now']):
+                            location = potential_location
+                            break
+                
+                retrieval_result = self.data_retriever.retrieve_data(f"weather in {location}", "api")
+            
+            # Web search queries
+            elif any(term in message_lower for term in ['google', 'search', 'look up', 'find']):
+                # Extract search term
+                search_patterns = [
+                    r'(?:google|search|look up|find)\s+(?:for\s+)?(.+?)(?:\s+on\s+google|\s+online|$)',
+                    r'what is\s+(.+?)(?:\?|$)',
+                    r'who is\s+(.+?)(?:\?|$)',
+                    r'when is\s+(.+?)(?:\?|$)',
+                    r'where is\s+(.+?)(?:\?|$)'
+                ]
+                
+                search_term = None
+                for pattern in search_patterns:
+                    match = re.search(pattern, message_lower)
+                    if match:
+                        search_term = match.group(1).strip()
+                        break
+                
+                if search_term:
+                    retrieval_result = self.data_retriever.retrieve_data(search_term, "search")
+            
+            # URL/web scraping
+            elif 'http' in message_lower or 'www.' in message_lower:
+                url_match = re.search(r'(https?://[^\s]+|www\.[^\s]+)', user_message)
+                if url_match:
+                    url = url_match.group(1)
+                    retrieval_result = self.data_retriever.retrieve_data(url, "web")
+            
+            # Command execution
+            elif any(cmd in message_lower for cmd in ['run', 'execute', 'command']):
+                # Extract command if it looks safe
+                command_patterns = [
+                    r'run\s+(.*?)(?:\s+command|$)',
+                    r'execute\s+(.*?)(?:\s+command|$)',
+                    r'command\s+(.*?)(?:$)'
+                ]
+                
+                command = None
+                for pattern in command_patterns:
+                    match = re.search(pattern, message_lower)
+                    if match:
+                        command = match.group(1).strip()
+                        break
+                
+                if command:
+                    retrieval_result = self.data_retriever.retrieve_data(command, "command")
+            
+            # Auto-detect method for other queries
+            else:
+                retrieval_result = self.data_retriever.retrieve_data(user_message, "auto")
+            
+            # Format the result for AI context
+            if retrieval_result and retrieval_result.get('success'):
+                return self._format_retrieval_context(retrieval_result, user_message)
+            elif retrieval_result:
+                return f"Data retrieval attempted but failed: {retrieval_result.get('error', 'Unknown error')}"
+            
+        except Exception as e:
+            return f"Data retrieval error: {str(e)}"
+        
+        return ""
+    
+    def _format_retrieval_context(self, result: Dict[str, Any], original_query: str) -> str:
+        """Format retrieval result into context for AI."""
+        method = result.get('method_used', 'unknown')
+        browser_fallback = result.get('browser_fallback', False)
+        
+        context_parts = [f"[Retrieved data for query: '{original_query}' using method: {method}]"]
+        
+        # Handle universal browser fallback first
+        if browser_fallback:
+            fallback_reason = result.get('fallback_reason', 'Data not satisfactory')
+            search_query = result.get('search_query', original_query)
+            
+            # Store the search query for later use (needs to be passed somehow)
+            # For now, we'll include it in the context
+            context_parts.append(f"Data Retrieval: {fallback_reason}.")
+            context_parts.append(f"Would you like me to open your browser and search for '{search_query}' to get better information? (Just say 'yes' or 'ok')")
+            context_parts.append(f"BROWSER_SEARCH_PENDING:{search_query}")  # Hidden marker for the system
+            
+            # Don't automatically open browser - let the user decide
+            return "\n".join(context_parts)
+        
+        # Continue with normal data formatting only if no browser fallback
+        if method == "web":
+            title = result.get('title', 'No title')
+            text_content = result.get('text_content', '')[:500]  # Limit length
+            context_parts.append(f"Page Title: {title}")
+            if text_content:
+                context_parts.append(f"Content Preview: {text_content}")
+        
+        elif method == "command":
+            stdout = result.get('stdout', '')[:500]  # Limit length
+            if stdout:
+                context_parts.append(f"Command Output: {stdout}")
+            
+            stderr = result.get('stderr', '')
+            if stderr:
+                context_parts.append(f"Command Error: {stderr}")
+        
+        elif method == "search":
+            # Check for sports-specific data first
+            if result.get('sports_data'):
+                sports_data = result['sports_data']
+                if sports_data.get('summary'):
+                    context_parts.append(f"Sports Info: {sports_data['summary']}")
+                if sports_data.get('match_details'):
+                    context_parts.append(f"Match Details: {sports_data['match_details']}")
+            
+            # Check for Google search results
+            elif result.get('search_results'):
+                context_parts.append(f"Found {len(result['search_results'])} search results")
+                if result.get('top_result_content'):
+                    content = result['top_result_content'].get('text_content', '')[:300]
+                    if content:
+                        context_parts.append(f"Top Result: {content}")
+            
+            # Fallback to standard search results
+            else:
+                abstract = result.get('abstract', '')
+                if abstract:
+                    context_parts.append(f"Search Summary: {abstract}")
+                
+                instant_answer = result.get('instant_answer', '')
+                if instant_answer:
+                    context_parts.append(f"Quick Answer: {instant_answer}")
+        
+        elif method == "api":
+            # Weather data
+            if 'weather' in original_query.lower():
+                weather = result.get('current_weather', {})
+                if weather:
+                    temp_c = weather.get('temperature_c', 'N/A')
+                    condition = weather.get('condition', 'N/A')
+                    location = result.get('location', 'Unknown location')
+                    context_parts.append(f"Weather in {location}: {temp_c}°C, {condition}")
+            
+            # Sports data
+            elif any(sport in original_query.lower() for sport in ['cricket', 'match', 'score', 'live']):
+                has_live_data = result.get('has_live_data', False)
+                verified_live = result.get('metadata', {}).get('verified_live', False)
+                browser_fallback = result.get('browser_fallback', False)
+                
+                if not has_live_data:
+                    if browser_fallback:
+                        # Offer to open browser
+                        search_query = result.get('search_query', original_query)
+                        context_parts.append(f"Sports Search: No live matches found for '{original_query}'. Opening your browser to search for the latest information...")
+                        
+                        # Open browser with search
+                        if hasattr(self, 'data_retriever') and self.data_retriever:
+                            browser_opened = self.data_retriever.open_browser_search(f"{search_query} live score cricket")
+                            if browser_opened:
+                                context_parts.append("Browser opened with your sports search query.")
+                            else:
+                                context_parts.append("Could not open browser automatically. Please search manually for live cricket scores.")
+                        else:
+                            context_parts.append("Please check sports websites manually for live match information.")
+                    else:
+                        context_parts.append(f"Sports Search: No live matches found for '{original_query}'. The requested match may not be currently playing.")
+                elif not verified_live:
+                    abstract = result.get('abstract', '')
+                    context_parts.append(f"Sports Info: Found some data but cannot verify if it's currently live: {abstract[:200]}")
+                else:
+                    # Only show data we've verified as live
+                    if result.get('sports_data'):
+                        sports_info = result['sports_data']
+                        context_parts.append(f"Live Sports Update: {sports_info.get('summary', 'Live match information found')}")
+                    elif result.get('abstract'):
+                        context_parts.append(f"Live Sports Update: {result.get('abstract', '')}")
+                    else:
+                        context_parts.append(f"Live Sports: Match data found but format unclear")
+        
+        # Add metadata
+        timestamp = result.get('timestamp', '')
+        if timestamp:
+            context_parts.append(f"Retrieved at: {timestamp}")
+        
+        return "\n".join(context_parts)
 
 
 class VoiceHandler:
