@@ -1,22 +1,52 @@
 #!/usr/bin/env python3
 """
-Gemini Desktop Assistant - Complete Command Line Interface
+Truvo - AI-Powered Desktop Assistant
 
 A self-operating desktop assistant powered by Google's Gemini AI that can see,
 understand, and interact with your desktop environment through natural language commands.
 """
 
+# Suppress Google AI library warnings
 import os
+import warnings
+import logging as default_logging
+
+# Multiple layers of Google library warning suppression
+os.environ['GRPC_VERBOSITY'] = 'ERROR'
+os.environ['GLOG_minloglevel'] = '3'  # More aggressive suppression
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['GRPC_TRACE'] = ''
+os.environ['GRPC_VERBOSITY'] = 'NONE'
+
+# Suppress all warnings
+warnings.filterwarnings('ignore')
+default_logging.getLogger('absl').setLevel(default_logging.ERROR)
+
 import sys
 import time
 import json
 import base64
 import logging
 import argparse
+import contextlib
 from io import BytesIO
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 from dataclasses import dataclass
+
+# Global variable for selected voice
+SELECTED_VOICE_ID = None
+
+@contextlib.contextmanager
+def suppress_stderr():
+    """Suppress stderr temporarily."""
+    with open(os.devnull, 'w') as devnull:
+        old_stderr = sys.stderr
+        sys.stderr = devnull
+        try:
+            yield
+        finally:
+            sys.stderr = old_stderr
 
 # Third-party imports
 import pyautogui
@@ -27,8 +57,9 @@ from pynput import mouse, keyboard
 from pynput.keyboard import Key
 from dotenv import load_dotenv
 
-# Google AI imports
-import google.generativeai as genai
+# Google AI imports with error suppression
+with suppress_stderr():
+    import google.generativeai as genai
 
 # NLP and ML imports
 try:
@@ -42,7 +73,7 @@ try:
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
-    print("⚠️  NLP libraries not installed. Using basic keyword detection. Install with: pip install scikit-learn nltk")
+    print("Warning: NLP libraries not installed. Using basic keyword detection. Install with: pip install scikit-learn nltk")
 
 # Voice recognition imports
 try:
@@ -53,7 +84,7 @@ try:
     VOICE_AVAILABLE = True
 except ImportError:
     VOICE_AVAILABLE = False
-    print("⚠️  Voice libraries not installed. Voice mode disabled. Install with: pip install SpeechRecognition pyttsx3 pyaudio")
+    print("Warning: Voice libraries not installed. Voice mode disabled. Install with: pip install SpeechRecognition pyttsx3 pyaudio")
 
 
 # =============================================================================
@@ -114,7 +145,7 @@ class IntentClassifier:
             nltk.download('wordnet', quiet=True)
             nltk.download('omw-1.4', quiet=True)
         except Exception as e:
-            print(f"⚠️  NLTK setup warning: {e}")
+            print(f"Warning: NLTK setup warning: {e}")
     
     def _preprocess_text(self, text):
         """Preprocess text for classification."""
@@ -280,12 +311,11 @@ class IntentClassifier:
             self.model.fit(texts, labels)
             self.is_trained = True
             
-            # Test accuracy on training data
+            # Train classifier silently
             accuracy = self.model.score(texts, labels)
-            print(f"🤖 NLP Intent Classifier trained with {accuracy:.2%} accuracy")
             
         except Exception as e:
-            print(f"⚠️  NLP training failed: {e}. Using fallback detection.")
+            print(f"Warning: NLP training failed: {e}. Using fallback detection.")
             self.is_trained = False
     
     def classify_intent(self, text: str) -> bool:
@@ -311,17 +341,12 @@ class IntentClassifier:
                 CONFIDENCE_THRESHOLD = 0.7  # 70% confidence required
                 
                 if max_confidence < CONFIDENCE_THRESHOLD:
-                    print(f"🤔 NLP Classification: 💬 CONVERSATION (low confidence: {max_confidence:.2%}, defaulting to chat)")
                     return True  # Default to conversation for ambiguous cases
-                
-                # Log the decision for debugging
-                intent_type = "💬 CONVERSATION" if prediction == 1 else "🚀 AUTOMATION"
-                print(f"🧠 NLP Classification: {intent_type} (confidence: {max_confidence:.2%})")
                 
                 return prediction == 1  # 1 = conversation, 0 = automation
                 
             except Exception as e:
-                print(f"⚠️  NLP classification failed: {e}. Using fallback.")
+                print(f"Warning: NLP classification failed: {e}. Using fallback.")
                 return self._fallback_detection(text)
         else:
             return self._fallback_detection(text)
@@ -339,9 +364,20 @@ class IntentClassifier:
             'copy', 'paste', 'install', 'screenshot'
         ]
         
+        # Website/URL patterns - these are likely automation tasks
+        website_patterns = [
+            '.com', '.org', '.net', '.edu', '.gov', '.io',
+            'google ', 'youtube', 'facebook', 'twitter', 'instagram',
+            'website', 'browser', 'search ', 'www.'
+        ]
+        
         for pattern in automation_patterns:
             if pattern in text_lower:
                 return False
+                
+        for pattern in website_patterns:
+            if pattern in text_lower:
+                return False  # Websites are automation tasks
         
         # Clear conversational patterns
         conversational_patterns = [
@@ -378,10 +414,12 @@ class GeminiClient:
         if not self.api_key:
             raise ValueError("Google AI API key is required")
         self.config = config or AssistantConfig()
-        genai.configure(api_key=self.api_key)
+        with suppress_stderr():
+            genai.configure(api_key=self.api_key)
         chosen = self._select_model_with_fallback(self.config.model_name)
         logging.info(f"Using Gemini model: {chosen}")
-        self.model = genai.GenerativeModel(chosen)
+        with suppress_stderr():
+            self.model = genai.GenerativeModel(chosen)
 
     def _select_model_with_fallback(self, requested: str) -> str:
         """Select model with intelligent fallback and quota awareness."""
@@ -398,27 +436,24 @@ class GeminiClient:
 
         # Auto selection with quota-aware prioritization
         if requested == 'auto':
-            print("🧠 Smart model selection: Testing models for availability...")
-            
-            # Try each preferred model and test if it works
+            # Try each preferred model silently
             for candidate in self.PREFERRED_MODELS:
                 if candidate in model_names:
                     if self._test_model_availability(candidate):
-                        print(f"✅ Selected working model: {candidate}")
                         return candidate
                     else:
-                        print(f"⚠️  {candidate} unavailable (likely quota exceeded)")
+                        print(f"Warning: {candidate} unavailable (likely quota exceeded)")
             
             # If all preferred models fail, try any available model
-            print("🔍 Trying alternative models...")
+            print("Trying alternative models...")
             for name in model_names:
                 if any(keyword in name for keyword in ['flash', 'pro']) and name not in self.PREFERRED_MODELS:
                     if self._test_model_availability(name):
-                        print(f"✅ Found working alternative: {name}")
+                        print(f"Found working alternative: {name}")
                         return name
         
         # Fallback to most reliable model
-        print("⚠️  Using fallback model (may have limited availability)")
+        print("Warning: Using fallback model (may have limited availability)")
         return 'gemini-1.5-flash'
     
     def _test_model_availability(self, model_name: str) -> bool:
@@ -428,8 +463,9 @@ class GeminiClient:
             test_model = genai.GenerativeModel(model_name)
             
             # Try a simple generation request
-            response = test_model.generate_content("Hi", 
-                generation_config=genai.types.GenerationConfig(max_output_tokens=1))
+            with suppress_stderr():
+                response = test_model.generate_content("Hi", 
+                    generation_config=genai.types.GenerationConfig(max_output_tokens=1))
             
             return True  # If we get here, model is working
             
@@ -516,7 +552,8 @@ Please respond in this JSON format:
 }}
 """
             
-            response = self.model.generate_content([prompt, image])
+            with suppress_stderr():
+                response = self.model.generate_content([prompt, image])
             return self._parse_response(response.text)
             
         except Exception as e:
@@ -785,7 +822,7 @@ class ChatBot:
         self.intent_classifier = IntentClassifier()  # NLP-based classifier
         
         # System prompt for the chatbot personality
-        self.system_prompt = """You are a helpful and friendly AI assistant integrated into a desktop automation tool. 
+        self.system_prompt = """You are a helpful and friendly AI assistant integrated into Truvo, a desktop automation tool. 
         You can have natural conversations about any topic while also being aware that you're part of a system 
         that can perform desktop automation tasks.
         
@@ -819,7 +856,8 @@ class ChatBot:
             context = self._build_conversation_context()
             
             # Generate response using Gemini
-            response = self.gemini_client.model.generate_content(context)
+            with suppress_stderr():
+                response = self.gemini_client.model.generate_content(context)
             
             if response and response.text:
                 bot_response = response.text.strip()
@@ -917,13 +955,19 @@ class VoiceHandler:
             
             # Calibrate microphone for ambient noise
             with self.microphone as source:
-                logging.info("🎤 Calibrating microphone for ambient noise...")
-                self.recognizer.adjust_for_ambient_noise(source, duration=1)
+                # Silent calibration for clean interface - longer duration for better calibration
+                self.recognizer.adjust_for_ambient_noise(source, duration=2)
+            
+            # Adjust recognition sensitivity for better speech detection
+            self.recognizer.energy_threshold = 300  # Lower threshold = more sensitive
+            self.recognizer.dynamic_energy_threshold = True
+            self.recognizer.dynamic_energy_adjustment_damping = 0.15
+            self.recognizer.dynamic_energy_ratio = 1.5
             
             # Initialize text-to-speech
             self.tts_engine = pyttsx3.init()
             self.tts_engine.setProperty('rate', self.config.tts_rate)
-            self.tts_engine.setProperty('volume', self.config.tts_volume)
+            self.tts_engine.setProperty('volume', 1.0)  # Set volume to maximum
             
             # Set voice (try to use female voice if available)
             voices = self.tts_engine.getProperty('voices')
@@ -936,7 +980,7 @@ class VoiceHandler:
                     # Use first available voice
                     self.tts_engine.setProperty('voice', voices[0].id)
             
-            logging.info("✅ Voice components initialized successfully")
+            # Voice components ready - silent initialization
             
         except Exception as e:
             logging.error(f"Failed to initialize voice components: {e}")
@@ -945,20 +989,13 @@ class VoiceHandler:
     def speak(self, text: str) -> bool:
         """Convert text to speech."""
         if not self.is_available or not self.tts_engine:
-            logging.warning("TTS not available - is_available: {}, tts_engine: {}".format(self.is_available, self.tts_engine is not None))
-            print("🔇 TTS not available")
             return False
         
         try:
-            print(f"🔊 Speaking: {text[:50]}{'...' if len(text) > 50 else ''}")
-            logging.info(f"🔊 Speaking: {text[:50]}{'...' if len(text) > 50 else ''}")
             self.tts_engine.say(text)
             self.tts_engine.runAndWait()
-            print("✅ Speech completed")
             return True
         except Exception as e:
-            logging.error(f"TTS error: {e}")
-            print(f"❌ TTS error: {e}")
             return False
     
     def listen_once(self, timeout: Optional[float] = None) -> Optional[str]:
@@ -970,31 +1007,37 @@ class VoiceHandler:
         timeout = timeout or self.config.voice_timeout
         
         try:
-            print("🎤 Listening... (speak now)")
+            print("Listening...")
             
             with self.microphone as source:
-                # Listen for audio with timeout
-                audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=10)
+                # Listen for audio with longer timeouts for complete speech
+                audio = self.recognizer.listen(source, 
+                                             timeout=30,  # Wait up to 30 seconds for speech to start
+                                             phrase_time_limit=20)  # Allow up to 20 seconds of continuous speech
             
-            print("🔍 Processing speech...")
+            pass  # Silent processing
             
             # Recognize speech using Google's speech recognition
             text = self.recognizer.recognize_google(audio, language=self.config.voice_language)
             
-            logging.info(f"🎤 Recognized: '{text}'")
-            print(f"✅ You said: '{text}'")
+            # Silent recognition for clean interface
+            # Remove debug output for clean interface
+            
+            # Ensure microphone is fully released
+            import time
+            time.sleep(0.2)
             
             return text.strip()
             
         except sr.WaitTimeoutError:
-            print("⏱️  No speech detected (timeout)")
+            print("No speech detected (timeout)")
             return None
         except sr.UnknownValueError:
-            print("⚠️  Could not understand audio")
+            print("Warning: Could not understand audio")
             return None
         except sr.RequestError as e:
             logging.error(f"Speech recognition error: {e}")
-            print(f"❌ Speech recognition error: {e}")
+            print(f"Speech recognition error: {e}")
             return None
         except Exception as e:
             logging.error(f"Unexpected voice error: {e}")
@@ -1012,7 +1055,7 @@ class VoiceHandler:
             daemon=True
         )
         self.listening_thread.start()
-        print("🎤 Continuous listening started (say 'stop listening' to quit)")
+        print("Continuous listening started (say 'stop listening' to quit)")
         return True
     
     def stop_continuous_listening(self):
@@ -1020,7 +1063,7 @@ class VoiceHandler:
         self.is_listening = False
         if self.listening_thread:
             self.listening_thread.join(timeout=2)
-        print("🔇 Continuous listening stopped")
+        print("Continuous listening stopped")
     
     def _continuous_listen_worker(self, callback_func):
         """Worker function for continuous listening."""
@@ -1031,7 +1074,7 @@ class VoiceHandler:
                 if text:
                     # Check for stop command
                     if any(phrase in text.lower() for phrase in ['stop listening', 'quit voice', 'disable voice']):
-                        print("🔇 Stop command detected")
+                        print("Stop command detected")
                         self.is_listening = False
                         break
                     
@@ -1045,28 +1088,28 @@ class VoiceHandler:
     def test_voice_setup(self) -> bool:
         """Test voice recognition and TTS setup."""
         if not self.is_available:
-            print("❌ Voice support not available")
+            print("Voice support not available")
             return False
         
-        print("📢 Testing voice setup...")
+        pass  # Silent voice setup
         
         # Test TTS
         if self.speak("Voice test. Can you hear me?"):
-            print("✅ Text-to-speech working")
+            pass  # Silent success
         else:
-            print("❌ Text-to-speech failed")
+            print("Text-to-speech failed")
             return False
         
         # Test speech recognition
-        print("🎤 Now testing speech recognition...")
+        pass  # Silent test
         text = self.listen_once(timeout=10)
         
         if text:
-            print(f"✅ Speech recognition working. You said: '{text}'")
+            pass  # Silent test success
             self.speak(f"I heard you say: {text}")
             return True
         else:
-            print("❌ Speech recognition failed or no input detected")
+            print("Speech recognition failed or no input detected")
             return False
     
     def get_voice_info(self) -> Dict[str, Any]:
@@ -1112,7 +1155,7 @@ class DesktopAssistant:
         self.task_progress = []
         self.is_running = False
         
-        logging.info("Desktop Assistant initialized")
+        logging.info("Truvo Desktop Assistant initialized")
     
     def execute_task(self, task_description: str) -> Dict[str, Any]:
         """Execute a high-level task with multi-step capability."""
@@ -1133,7 +1176,7 @@ class DesktopAssistant:
             logging.info("🔄 Detected multi-step task - will use iterative approach")
             return self._execute_multi_step_task(task_description)
         else:
-            logging.info("📝 Single-step task - using standard approach")
+            logging.info("Single-step task - using standard approach")
             return self._execute_single_step_task(task_description)
     
     def _execute_multi_step_task(self, task_description: str) -> Dict[str, Any]:
@@ -1182,7 +1225,7 @@ class DesktopAssistant:
                 
                 # Check if task appears complete (no more actions needed)
                 if not actions:
-                    logging.info("✅ Task appears complete - no more actions suggested")
+                    logging.info("Task appears complete - no more actions suggested")
                     break
                 
                 logging.info(f"AI generated {len(actions)} actions for iteration {iteration + 1}: {[a.get('description', 'No desc') for a in actions]}")
@@ -1420,7 +1463,7 @@ class DesktopAssistant:
         
         safety_risk = action.get("safety_risk", False)
         if safety_risk:
-            print(f"⚠️  WARNING: This action may have safety risks!")
+            print(f"WARNING: This action may have safety risks!")
         
         confidence = action.get("confidence", 0.0)
         print(f"AI Confidence: {confidence:.2f}")
@@ -1478,7 +1521,7 @@ class DesktopAssistant:
 # CLI Functions
 # =============================================================================
 
-def setup_logging(level: str = "INFO"):
+def setup_logging(level: str = "ERROR"):
     """Set up logging configuration."""
     logging.basicConfig(
         level=getattr(logging, level.upper()),
@@ -1513,61 +1556,98 @@ def load_environment():
             try:
                 with open('.env', 'w') as f:
                     f.write(f"GOOGLE_AI_API_KEY={api_key}\n")
-                print("✅ API key saved to .env file")
+                print("API key saved to .env file")
             except Exception as e:
-                print(f"⚠️  Could not save to .env file: {e}")
+                print(f"Warning: Could not save to .env file: {e}")
         else:
             sys.exit(1)
 
 
+def select_voice():
+    """Let user select TTS voice or auto-select."""
+    try:
+        import pyttsx3
+        engine = pyttsx3.init()
+        voices = engine.getProperty('voices')
+        
+        if not voices:
+            print("No voices available, using default")
+            return None
+            
+        print(f"Available voices:")
+        for i, voice in enumerate(voices):
+            # Get a clean voice name
+            name = voice.name.split(' - ')[0] if ' - ' in voice.name else voice.name
+            print(f"  {i}: {name}")
+        
+        # Find best default voice (prefer female or natural sounding)
+        default_idx = 0
+        for i, voice in enumerate(voices):
+            voice_name = voice.name.lower()
+            if any(keyword in voice_name for keyword in ['zira', 'hazel', 'aria', 'female']):
+                default_idx = i
+                break
+        else:
+            # If no preferred voice found, use second voice if available (often better than first)
+            if len(voices) > 1:
+                default_idx = 1
+        
+        default_voice = voices[default_idx]
+        default_name = default_voice.name.split(' - ')[0] if ' - ' in default_voice.name else default_voice.name
+        
+        chosen = input(f"Choose voice (or press Enter for {default_name}): ").strip()
+        
+        if chosen == "":
+            return default_voice.id
+        
+        try:
+            voice_idx = int(chosen)
+            if 0 <= voice_idx < len(voices):
+                return voices[voice_idx].id
+            else:
+                print("Invalid voice number, using default")
+                return default_voice.id
+        except ValueError:
+            print("Invalid input, using default")
+            return default_voice.id
+            
+    except Exception as e:
+        print(f"Voice selection error: {e}")
+        return None
+
+
 def interactive_mode():
     """Run the assistant in interactive mode."""
-    print("╔══════════════════════════════════════════════════════════╗")
-    print("║            GEMINI DESKTOP ASSISTANT - CLI                 ║")
-    print("╠══════════════════════════════════════════════════════════╣")
-    print("║ 🤖 AI-powered desktop automation                          ║")
-    print("║ 📸 Visual screen understanding                            ║")
-    print("║ 🔒 Safe operation with confirmations                      ║")
-    print("║ 💬 Natural language conversation support                  ║")
-    print("╚══════════════════════════════════════════════════════════╝")
-    print()
-    print("Type your tasks in natural language or use these commands:")
-    print("• 'help' - Show available commands")
-    print("• 'analyze' - Analyze current screen")
-    print("• 'status' - Show assistant status")
-    print("• 'chat-history' - Show conversation history")
-    print("• 'clear-chat' - Clear conversation history")
-    print("• 'quit' - Exit the assistant")
-    print()
-    print("💡 Tip: I can handle both automation tasks and general conversation!")
-    print("   Ask me anything or tell me what you want to do on your computer.")
-    print()
-    
-    # Load configuration
-    # Ensure environment is loaded and API key is available
     load_environment()
     
-    # Preload available models (now with proper API key)
+    # Preload available models
     try:
-        # Configure genai with API key first
         api_key = os.getenv('GOOGLE_AI_API_KEY')
         if api_key:
-            genai.configure(api_key=api_key)
-            available = GeminiClient.list_available_models()
+            with suppress_stderr():
+                genai.configure(api_key=api_key)
+                available = GeminiClient.list_available_models()
         else:
             available = []
     except Exception as e:
-        print(f"⚠️  Could not load models: {e}")
         available = []
         
     default_model = 'auto'
     if available:
-        print(f"🎯 Available models: {', '.join(available)}")
-        print(f"🌟 Recommended: {available[0] if available else 'gemini-1.5-flash'}")
+        print(f"Available models: {', '.join(available)}")
+        print(f"Recommended: {available[0] if available else 'gemini-1.5-flash'}")
     else:
-        print("📋 Available models: Will be auto-selected")
+        print("Available models: Will be auto-selected")
         
     chosen = input(f"Choose model (or press Enter for {default_model}): ").strip() or default_model
+    
+    # Voice selection
+    selected_voice = select_voice()
+    
+    # Store selected voice globally for subprocess calls
+    global SELECTED_VOICE_ID
+    SELECTED_VOICE_ID = selected_voice
+    
     config = AssistantConfig(
         safe_mode=False,
         confirmation_required=False,
@@ -1577,26 +1657,24 @@ def interactive_mode():
     
     # Initialize assistant and chatbot
     try:
-        print("🔄 Initializing assistant...")
+
         assistant = DesktopAssistant(config)
         chatbot = ChatBot(assistant.gemini_client)
-        print(f"✅ Assistant ready! (Safe Mode: {'ON' if config.safe_mode else 'OFF'})")
-        print("✅ Chatbot ready! You can have conversations or automate tasks.")
-        print()
+        pass  # Clean startup - no system messages
     except Exception as e:
-        print(f"❌ Failed to initialize assistant: {e}")
+        print(f"Error: Failed to initialize Truvo: {e}")
         return
     
     while True:
         try:
-            user_input = input("🤖 › ").strip()
+            user_input = input("You: ").strip()
             
             if not user_input:
                 continue
                 
             # Handle commands
             if user_input.lower() in ['quit', 'exit', 'q']:
-                print("👋 Goodbye!")
+                print("Goodbye!")
                 break
             elif user_input.lower() == 'help':
                 show_help()
@@ -1608,11 +1686,11 @@ def interactive_mode():
                 analyze_screen(assistant)
                 continue
             elif user_input.lower() in ['chat-history', 'history']:
-                print(f"📜 {chatbot.get_history_summary()}")
+                print(f"Chat history: {chatbot.get_history_summary()}")
                 continue
             elif user_input.lower() in ['clear-chat', 'clear-history']:
                 chatbot.clear_history()
-                print("🧹 Conversation history cleared!")
+                print("Conversation history cleared!")
                 continue
             elif user_input.lower().startswith('config'):
                 handle_config_command(assistant, user_input)
@@ -1642,46 +1720,37 @@ def interactive_mode():
             
             if is_chat:
                 # Handle as conversation
-                print(f"\n💬 Chatting: {user_input}")
-                print("─" * 60)
-                
                 response = chatbot.chat(user_input)
-                print(f"\n🤖 {response}")
+                print(f"Truvo: {response}")
                 
-                # Voice response if voice is enabled (after text is shown)
+                # Voice response if voice is enabled (silent)
                 if assistant.voice_handler and assistant.voice_handler.is_available:
-                    print("🔊 [Speaking response...]")
                     assistant.voice_handler.speak(response)
-                
-                print()
             else:
                 # Handle as automation task
-                print(f"\n🚀 Executing: {user_input}")
-                print("─" * 60)
-                
                 result = assistant.execute_task(user_input)
                 
                 # Show results
-                print("\n" + "═"*60)
+                print("\n" + "="*60)
                 if result["success"]:
-                    print(f"✅ SUCCESS - Task completed!")
+                    print(f"SUCCESS - Task completed!")
                     print(f"   Actions: {result['actions_completed']}/{result['total_actions']}")
                 else:
-                    print(f"❌ FAILED - {result.get('error', 'Unknown error')}")
+                    print(f"FAILED - {result.get('error', 'Unknown error')}")
                     print(f"   Actions completed: {result['actions_completed']}")
                     
                     if result.get("safety_concerns"):
-                        print(f"⚠️  Safety concerns: {', '.join(result['safety_concerns'])}")
-                print("═"*60)
-                print()
+                        print(f"Safety concerns: {', '.join(result['safety_concerns'])}")
+                print("="*60)
             
         except KeyboardInterrupt:
-            print("\n\n🛑 Task interrupted by user")
+            print("\n\nTask interrupted by user")
             assistant.stop_task()
-            print()
+        except EOFError:
+            print("Goodbye!")
+            break
         except Exception as e:
-            print(f"\n❌ Error: {e}")
-            print()
+            print(f"\nError: {e}")
 
 
 def show_help():
@@ -1691,22 +1760,22 @@ def show_help():
 ║                         HELP                             ║
 ╠══════════════════════════════════════════════════════════╣
 ║                                                          ║
-║ 📋 TASK EXAMPLES:                                        ║
+║ TASK EXAMPLES:                                           ║
 ║   • "Take a screenshot"                                  ║
 ║   • "Open notepad and type hello world"                 ║
 ║   • "Click on the Chrome icon"                          ║
 ║   • "Press the Windows key"                             ║
 ║   • "Scroll down 3 times"                               ║
 ║                                                          ║
-║ 🔧 CONTROL COMMANDS:                                     ║
+║ CONTROL COMMANDS:                                        ║
 ║   • help         - Show this help                       ║
 ║   • status       - Show assistant status                ║
 ║   • analyze      - Analyze current screen               ║
 ║   • chat-history - Show conversation history            ║
 ║   • clear-chat   - Clear conversation history           ║
-║   • quit         - Exit assistant                       ║
+║   • quit         - Exit Truvo                           ║
 ║                                                          ║
-║ 🎤 VOICE COMMANDS:                                       ║
+║ VOICE COMMANDS:                                          ║
 ║   • voice        - Enable voice mode                    ║
 ║   • voice off    - Disable voice mode                   ║
 ║   • voice test   - Test voice setup                     ║
@@ -1715,20 +1784,20 @@ def show_help():
 ║   • always listen- Continuous voice mode                ║
 ║   • voice status - Show voice capabilities              ║
 ║                                                          ║
-║ 💬 CONVERSATION:                                         ║
+║ CONVERSATION:                                            ║
 ║   • Ask me anything! I can chat about any topic         ║
 ║   • "What's the weather like?"                          ║
 ║   • "Tell me a joke"                                    ║
 ║   • "How do neural networks work?"                      ║
 ║   • "What do you think about..."                        ║
 ║                                                          ║
-║ ⚙️  CONFIGURATION:                                       ║
+║ CONFIGURATION:                                           ║
 ║   • config safe on/off      - Toggle safe mode         ║
 ║   • config confirm on/off   - Toggle confirmations     ║
 ║   • config voice on/off     - Toggle voice mode        ║
 ║   • config show             - Show current config      ║
 ║                                                          ║
-║ 💡 TIPS:                                                ║
+║ TIPS:                                                    ║
 ║   • Be specific about what you want                     ║
 ║   • Use Ctrl+C to stop running tasks                    ║
 ║   • Screenshots are saved automatically                 ║
@@ -1745,7 +1814,7 @@ def show_status(assistant: DesktopAssistant):
     
     print(f"""
 ╔══════════════════════════════════════════════════════════╗
-║                    ASSISTANT STATUS                      ║
+║                      TRUVO STATUS                        ║
 ╠══════════════════════════════════════════════════════════╣
 ║ Current Task: {(status['current_task'] or 'None'):<40} ║
 ║ Running: {('Yes' if status['is_running'] else 'No'):<47} ║
@@ -1761,7 +1830,7 @@ def show_status(assistant: DesktopAssistant):
 
 def analyze_screen(assistant: DesktopAssistant):
     """Analyze the current screen."""
-    print("🔍 Analyzing current screen...")
+    print("Analyzing current screen...")
     
     try:
         analysis = assistant.analyze_current_screen("Describe what you see on this screen in detail.")
@@ -1777,13 +1846,13 @@ def analyze_screen(assistant: DesktopAssistant):
                 print(f"  {i}. {action.get('description', 'No description')}")
         
         if analysis.get('safety_concerns'):
-            print(f"\n⚠️  Safety Concerns: {', '.join(analysis['safety_concerns'])}")
+            print(f"\nSafety Concerns: {', '.join(analysis['safety_concerns'])}")
             
         print(f"\nConfidence: {analysis.get('overall_confidence', 0.0):.2f}")
         print("═"*60)
         
     except Exception as e:
-        print(f"❌ Error analyzing screen: {e}")
+        print(f"Error analyzing screen: {e}")
 
 
 def toggle_voice_mode(assistant: DesktopAssistant, enable: bool):
@@ -1792,31 +1861,29 @@ def toggle_voice_mode(assistant: DesktopAssistant, enable: bool):
     
     if enable:
         if not VOICE_AVAILABLE:
-            print("❌ Voice libraries not installed. Install with: pip install SpeechRecognition pyttsx3 pyaudio")
+            print("Voice libraries not installed. Install with: pip install SpeechRecognition pyttsx3 pyaudio")
             return
         
         if not assistant.voice_handler:
-            print("🔊 Initializing voice handler...")
             assistant.voice_handler = VoiceHandler(assistant.config)
         
         if assistant.voice_handler.is_available:
-            print("✅ Voice mode enabled! You can now use voice commands.")
-            assistant.voice_handler.speak("Voice mode enabled. How can I help you?")
+            assistant.voice_handler.speak("Voice mode enabled.")
         else:
-            print("❌ Voice initialization failed")
+            print("Voice initialization failed")
     else:
-        print("🔇 Voice mode disabled")
+        print("Voice mode disabled")
         assistant.voice_handler = None
 
 
 def test_voice_setup(assistant: DesktopAssistant):
     """Test voice recognition and TTS setup."""
     if not VOICE_AVAILABLE:
-        print("❌ Voice libraries not installed")
+        print("Voice libraries not installed")
         return
     
     if not assistant.voice_handler:
-        print("🔊 Initializing voice handler for testing...")
+        print("Initializing voice handler for testing...")
         temp_handler = VoiceHandler(assistant.config)
     else:
         temp_handler = assistant.voice_handler
@@ -1824,34 +1891,28 @@ def test_voice_setup(assistant: DesktopAssistant):
     success = temp_handler.test_voice_setup()
     
     if success:
-        print("✅ Voice setup test completed successfully!")
+        pass  # Silent success
     else:
-        print("❌ Voice setup test failed. Check your microphone and speakers.")
+        print("Voice setup test failed. Check your microphone and speakers.")
 
 
 def start_continuous_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
     """Start continuous voice listening mode."""
     # Auto-enable voice if not available
     if not assistant.voice_handler or not assistant.voice_handler.is_available:
-        print("🔊 Enabling voice mode for continuous listening...")
+        print("Enabling voice mode for continuous listening...")
         toggle_voice_mode(assistant, True)
         if not assistant.voice_handler or not assistant.voice_handler.is_available:
-            print("❌ Failed to enable voice mode. Check your microphone and speakers.")
+            print("Failed to enable voice mode. Check your microphone and speakers.")
             return
     
-    print("\n🎤 Continuous Voice Mode Activated!")
-    print("═" * 60)
-    print("🗣️  Just speak naturally - I'm always listening")
-    print("🔇 Say 'stop listening' or 'quit voice' to exit")
-    print("⏸️  Press Ctrl+C to return to text mode")
-    print("═" * 60)
-    print()
+    pass  # Silent activation
     
     assistant.voice_handler.speak("Continuous voice mode activated. I'm listening for your commands.")
     
     def voice_callback(text):
         """Process voice input in continuous mode."""
-        print(f"🗣️ You: {text}")
+        print(f"You: {text}")
         
         # Check for exit commands
         exit_phrases = ['stop listening', 'quit voice', 'exit voice', 'disable voice', 'voice off']
@@ -1864,24 +1925,24 @@ def start_continuous_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
         is_chat = chatbot.is_conversational_query(text)
         
         if is_chat:
-            print("💬 Processing...")
+            print("Processing...")
             response = chatbot.chat(text)
-            print(f"🤖 Assistant: {response}")
+            print(f"Truvo: {response}")
             # Voice after text is shown
             assistant.voice_handler.speak(response)
         else:
-            print("🚀 Executing...")
+            print("Executing...")
             assistant.voice_handler.speak("Executing your request.")
             
             result = assistant.execute_task(text)
             
             if result["success"]:
                 success_msg = f"Task completed. {result['actions_completed']} actions performed."
-                print(f"✅ {success_msg}")
+                print(f"{success_msg}")
                 assistant.voice_handler.speak(success_msg)
             else:
                 error_msg = f"Task failed: {result.get('error', 'Unknown error')}"
-                print(f"❌ {error_msg}")
+                print(f"Error: {error_msg}")
                 assistant.voice_handler.speak(error_msg)
         
         print("─" * 30)
@@ -1896,36 +1957,27 @@ def start_continuous_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
             time.sleep(0.1)
             
     except KeyboardInterrupt:
-        print("\n\n⏹️ Continuous voice mode interrupted")
         assistant.voice_handler.stop_continuous_listening()
     
-    print("🔇 Exited continuous voice mode\n")
+    pass  # Silent exit
 
 
 def start_interactive_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
     """Start interactive voice chat mode with prompts."""
     # Auto-enable voice if not available
     if not assistant.voice_handler or not assistant.voice_handler.is_available:
-        print("🔊 Enabling voice mode for interactive chat...")
+        pass  # Silent enable
         toggle_voice_mode(assistant, True)
         if not assistant.voice_handler or not assistant.voice_handler.is_available:
-            print("❌ Failed to enable voice mode. Check your microphone and speakers.")
+            print("Failed to enable voice mode. Check your microphone and speakers.")
             return
     
-    print("\n🎤 Interactive Voice Chat Mode!")
-    print("═" * 50)
-    print("🗣️  I'll ask for your input, then listen")
-    print("🔇 Say 'quit' or press Ctrl+C to exit")
-    print("═" * 50)
-    print()
-    
-    assistant.voice_handler.speak("Interactive voice chat started. Let's have a conversation!")
+    # Interactive voice mode - minimal UI
+    # Start directly without initialization messages
     
     try:
         while True:
-            # Prompt for voice input
-            assistant.voice_handler.speak("What would you like to say?")
-            print("🎤 Your turn - speak now...")
+            # Prompt for voice input - silent
             
             # Listen for input
             text = assistant.voice_handler.listen_once(timeout=15)
@@ -1934,11 +1986,11 @@ def start_interactive_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
                 assistant.voice_handler.speak("I didn't hear anything. Let's try again.")
                 continue
             
-            print(f"🗣️ You said: {text}")
+            print(f"You said: {text}")
             
             # Check for exit
             if any(word in text.lower() for word in ['quit', 'exit', 'stop', 'goodbye', 'bye']):
-                assistant.voice_handler.speak("Goodbye! It was nice talking with you.")
+                assistant.voice_handler.speak("Goodbye!")
                 break
             
             # Process input
@@ -1946,74 +1998,85 @@ def start_interactive_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
             
             if is_chat:
                 response = chatbot.chat(text)
-                print(f"🤖 Assistant: {response}")
-                # Voice after text is shown
-                assistant.voice_handler.speak(response)
+                print(f"Truvo: {response}")
+                # Voice response - use external TTS process to avoid conflicts
+                if assistant.voice_handler and assistant.voice_handler.is_available:
+                    try:
+                        import subprocess
+                        # Use complete response for voice - no truncation
+                        voice_response = response.replace('\n', ' ').replace('  ', ' ').strip()
+                        
+                        # Use external TTS script with no timeout - let it complete fully
+                        cmd = [sys.executable, "speak.py", voice_response]
+                        if SELECTED_VOICE_ID:
+                            cmd.append(SELECTED_VOICE_ID)
+                        subprocess.run(cmd, 
+                                     cwd="c:\\Users\\deb0p\\truvo",
+                                     # No timeout - let it speak completely
+                                     capture_output=True)
+                    except Exception as e:
+                        print(f"External TTS Error: {e}")
             else:
-                print("🚀 Executing task...")
+                print("Executing task...")
                 assistant.voice_handler.speak("I'll execute that task for you.")
                 
                 result = assistant.execute_task(text)
                 
                 if result["success"]:
                     success_msg = f"Done! {result['actions_completed']} actions completed."
-                    print(f"✅ {success_msg}")
+                    print(f"{success_msg}")
                     assistant.voice_handler.speak(success_msg)
                 else:
                     error_msg = f"Sorry, that didn't work: {result.get('error', 'Unknown error')}"
-                    print(f"❌ {error_msg}")
+                    print(f"Error: {error_msg}")
                     assistant.voice_handler.speak(error_msg)
             
-            print("─" * 30)
+            # Clean interface - no separators
             
     except KeyboardInterrupt:
-        print("\n\n👋 Interactive voice chat interrupted")
-        assistant.voice_handler.speak("Chat interrupted. Goodbye!")
+        assistant.voice_handler.speak("Goodbye!")
     
-    print("🔇 Exited interactive voice mode\n")
+    pass  # Silent exit
 
 
 def handle_voice_input(assistant: DesktopAssistant, chatbot: ChatBot):
     """Handle a single voice input and process it."""
     if not assistant.voice_handler or not assistant.voice_handler.is_available:
-        print("❌ Voice mode not available. Type 'voice' to enable it.")
+        print("Voice mode not available. Type 'voice' to enable it.")
         return
     
-    print("\n🎤 Voice input mode activated")
-    print("─" * 40)
-    
-    # Listen for voice input
+    # Listen for voice input - clean interface
     text = assistant.voice_handler.listen_once()
     
     if text:
-        print(f"🗣️ Voice input: {text}")
+        print(f"Voice input: {text}")
         
         # Process the voice input like regular text input
         is_chat = chatbot.is_conversational_query(text)
         
         if is_chat:
             # Handle as conversation
-            print(f"\n💬 Processing conversation...")
+            print(f"\nProcessing conversation...")
             response = chatbot.chat(text)
-            print(f"🤖 {response}")
+            print(f"Truvo: {response}")
             assistant.voice_handler.speak(response)
         else:
             # Handle as automation task
-            print(f"\n🚀 Executing automation task...")
+            print(f"\nExecuting automation task...")
             assistant.voice_handler.speak("Executing your request.")
             
             result = assistant.execute_task(text)
             
             if result["success"]:
                 success_msg = f"Task completed successfully. {result['actions_completed']} actions performed."
-                print(f"✅ {success_msg}")
+                print(f"{success_msg}")
                 assistant.voice_handler.speak(success_msg)
             else:
                 error_msg = f"Task failed: {result.get('error', 'Unknown error')}"
-                print(f"❌ {error_msg}")
+                print(f"Error: {error_msg}")
                 assistant.voice_handler.speak(error_msg)
     else:
-        print("🔇 No voice input detected")
+        print("No voice input detected")
     
     print("─" * 40)
     print()
@@ -2041,20 +2104,20 @@ def handle_config_command(assistant: DesktopAssistant, command: str):
     if setting == 'safe':
         if value in ['on', 'true', 'yes']:
             assistant.set_safe_mode(True)
-            print("✅ Safe mode enabled")
+            print("Safe mode enabled")
         elif value in ['off', 'false', 'no']:
             assistant.set_safe_mode(False)
-            print("⚠️  Safe mode disabled")
+            print("Safe mode disabled")
         else:
             print("Usage: config safe on/off")
     
     elif setting in ['confirm', 'confirmation']:
         if value in ['on', 'true', 'yes']:
             assistant.set_confirmation_required(True)
-            print("✅ Action confirmation enabled")
+            print("Action confirmation enabled")
         elif value in ['off', 'false', 'no']:
             assistant.set_confirmation_required(False)
-            print("⚠️  Action confirmation disabled")
+            print("Action confirmation disabled")
         else:
             print("Usage: config confirm on/off")
     
@@ -2066,13 +2129,13 @@ def handle_config_command(assistant: DesktopAssistant, command: str):
         elif value == 'status':
             if assistant.voice_handler:
                 info = assistant.voice_handler.get_voice_info()
-                print(f"🎤 Voice Status: {'Available' if info['available'] else 'Not Available'}")
+                print(f"Voice Status: {'Available' if info['available'] else 'Not Available'}")
                 if info['available']:
                     print(f"   Listening: {'Yes' if info['listening'] else 'No'}")
                     print(f"   TTS Voices: {info.get('tts_voices', 'Unknown')}")
                     print(f"   TTS Rate: {info.get('tts_rate', 'Unknown')} WPM")
             else:
-                print("🔇 Voice mode disabled")
+                print("Voice mode disabled")
         else:
             print("Usage: config voice on/off/status")
     
@@ -2082,7 +2145,7 @@ def handle_config_command(assistant: DesktopAssistant, command: str):
 
 def single_task_mode(task: str):
     """Execute a single task and exit."""
-    print(f"🚀 Executing single task: {task}")
+    print(f"Executing single task: {task}")
     model = os.getenv('ASSISTANT_MODEL', 'auto')
     config = AssistantConfig(
         safe_mode=False,
@@ -2096,21 +2159,21 @@ def single_task_mode(task: str):
         result = assistant.execute_task(task)
         
         if result["success"]:
-            print(f"✅ Task completed successfully!")
+            print(f"Task completed successfully!")
             print(f"Actions: {result['actions_completed']}/{result['total_actions']}")
         else:
-            print(f"❌ Task failed: {result.get('error', 'Unknown error')}")
+            print(f"Task failed: {result.get('error', 'Unknown error')}")
             sys.exit(1)
             
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         sys.exit(1)
 
 
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Gemini Desktop Assistant - AI-powered desktop automation",
+        description="Truvo - AI-powered desktop automation assistant",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -2134,7 +2197,7 @@ Examples:
     parser.add_argument(
         '--log-level',
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-        default='INFO',
+        default='ERROR',
         help='Set logging level'
     )
     
@@ -2192,9 +2255,9 @@ Examples:
         else:
             interactive_mode()
     except KeyboardInterrupt:
-        print("\n👋 Goodbye!")
+        print("\nGoodbye!")
     except Exception as e:
-        print(f"❌ Fatal error: {e}")
+        print(f"Fatal error: {e}")
         sys.exit(1)
 
 
