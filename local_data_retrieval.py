@@ -45,7 +45,6 @@ class UniversalAssistant:
         self.system_info = self._get_system_info()
         self.os_name = platform.system()
         self.conversation_context = []
-        print("✅ Universal Assistant loaded - Ready to answer ANY question!")
     
     def _get_system_info(self) -> Dict[str, Any]:
         """Gather comprehensive system information."""
@@ -406,27 +405,39 @@ class UniversalAssistant:
     
     def _translate_to_command(self, query: str) -> str:
         """Translate natural language to system commands."""
-        # Common folder paths
+        # Common folder paths with alternative names
         user_profile = self.system_info['user_profile']
         common_folders = {
             'downloads': os.path.join(user_profile, 'Downloads'),
-            'documents': os.path.join(user_profile, 'Documents'), 
+            'download': os.path.join(user_profile, 'Downloads'),  # Singular form
+            'documents': os.path.join(user_profile, 'Documents'),
+            'document': os.path.join(user_profile, 'Documents'),  # Singular form 
             'desktop': os.path.join(user_profile, 'Desktop'),
             'pictures': os.path.join(user_profile, 'Pictures'),
+            'picture': os.path.join(user_profile, 'Pictures'),  # Singular form
             'music': os.path.join(user_profile, 'Music'),
-            'videos': os.path.join(user_profile, 'Videos')
+            'videos': os.path.join(user_profile, 'Videos'),
+            'video': os.path.join(user_profile, 'Videos')  # Singular form
         }
         
         query_lower = query.lower()
         
-        # File counting queries
-        if 'files in' in query_lower:
+        # File counting and listing queries
+        if any(pattern in query_lower for pattern in ['files in', 'count files in', 'how many files in']):
             for folder_name, folder_path in common_folders.items():
                 if folder_name in query_lower:
-                    if self.os_name == 'Windows':
-                        return f'powershell "Get-ChildItem \'{folder_path}\' | Format-Table Name, Length, LastWriteTime"'
+                    # If asking for count specifically
+                    if any(count_word in query_lower for count_word in ['how many', 'count', 'number of']):
+                        if self.os_name == 'Windows':
+                            return f'powershell "(Get-ChildItem \'{folder_path}\').Count"'
+                        else:
+                            return f'ls -1 "{folder_path}" | wc -l'
+                    # Otherwise list files
                     else:
-                        return f'ls -la "{folder_path}"'
+                        if self.os_name == 'Windows':
+                            return f'powershell "Get-ChildItem \'{folder_path}\' | Format-Table Name, Length, LastWriteTime"'
+                        else:
+                            return f'ls -la "{folder_path}"'
         
         # Directory listing
         if any(pattern in query_lower for pattern in ['list files', 'show files']):
@@ -435,8 +446,17 @@ class UniversalAssistant:
             else:
                 return 'ls -la'
         
-        # File count in current directory
+        # File count in specific folder
         if any(pattern in query_lower for pattern in ['how many files', 'count files']):
+            # Check if asking about a specific folder
+            for folder_name, folder_path in common_folders.items():
+                if folder_name in query_lower:
+                    if self.os_name == 'Windows':
+                        return f'powershell "(Get-ChildItem \'{folder_path}\').Count"'
+                    else:
+                        return f'ls -1 "{folder_path}" | wc -l'
+            
+            # Default to current directory if no specific folder mentioned
             if self.os_name == 'Windows':
                 return 'powershell "(Get-ChildItem).Count"'
             else:

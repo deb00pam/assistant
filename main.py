@@ -97,15 +97,24 @@ except ImportError:
     OS_DETECTION_AVAILABLE = False
     print("Warning: OS detection not available")
 
-# Data Retrieval import - New Local Data Retrieval
+# Data Retrieval import - Local + Web Retrieval Integration
 try:
     from local_data_retrieval import universal_assistant, retrieve_data, get_system_info
-    DATA_RETRIEVAL_AVAILABLE = True
-    print("✅ Universal Assistant loaded - Ready to answer ANY question!")
+    LOCAL_DATA_AVAILABLE = True
 except ImportError:
-    DATA_RETRIEVAL_AVAILABLE = False
+    LOCAL_DATA_AVAILABLE = False
     universal_assistant = None
-    print("Warning: Universal Assistant not available")
+
+# Web Data Retrieval import - LangChain powered
+try:
+    from web_data_retrieval import web_retrieval, get_web_answer, search_web
+    WEB_DATA_AVAILABLE = True
+except ImportError:
+    WEB_DATA_AVAILABLE = False
+    web_retrieval = None
+
+# Combined availability
+DATA_RETRIEVAL_AVAILABLE = LOCAL_DATA_AVAILABLE or WEB_DATA_AVAILABLE
 
 
 # =============================================================================
@@ -483,7 +492,6 @@ class GeminiClient:
             if fallback in model_names:
                 print(f"  Testing {fallback}...")
                 if self._test_model_availability(fallback):
-                    print(f"✅ Using fallback: {fallback}")
                     return fallback
         
         # Last resort - return the most stable model even if untested
@@ -892,8 +900,18 @@ class ChatBot:
         
         # Initialize data retrieval capabilities
         self.data_retrieval_available = DATA_RETRIEVAL_AVAILABLE
-        if self.data_retrieval_available:
+        self.local_data_available = LOCAL_DATA_AVAILABLE
+        self.web_data_available = WEB_DATA_AVAILABLE
+        
+        if self.local_data_available:
             self.universal_assistant = universal_assistant
+        else:
+            self.universal_assistant = None
+            
+        if self.web_data_available:
+            self.web_retrieval = web_retrieval
+        else:
+            self.web_retrieval = None
         
         # System prompt for the chatbot personality with OS context
         os_context = ""
@@ -908,6 +926,8 @@ class ChatBot:
         You can have natural conversations about any topic while also being aware that you're part of a system 
         that can perform desktop automation tasks.{os_context}
         
+        CURRENT DATE: {datetime.now().strftime("%B %d, %Y")} (Remember this for any date-related queries)
+        
         When users ask general questions, provide helpful and engaging responses. 
         
         When users ask about your capabilities or what tasks you can perform, explain that you can:
@@ -918,12 +938,24 @@ class ChatBot:
            - Typing text and pressing keys
            - Taking screenshots and analyzing screens
            - Navigating websites and software
-        3. Retrieve real-time data including:
-           - Web scraping from websites
-           - Executing system commands safely
-           - Getting weather information
-           - Searching the web for information
-           - Reading news articles
+        3. Retrieve comprehensive data including:
+           - SYSTEM INFO: Memory, disk space, PC name, uptime, hardware details
+           - SYSTEM COMMANDS: File counts, directory listings, system operations
+           - LIVE WEB DATA: Stock prices, weather, news, sports scores (via LangChain)
+           - WEB SEARCH: Professional-grade web search using DuckDuckGo and SerpAPI
+           - DIRECT APIS: Weather data, financial data, news feeds, sports information
+           
+        IMPORTANT: I have integrated local and web data retrieval capabilities.
+        - For system queries (like "free memory", "PC name"), I use local system data
+        - For live data (like "Tesla stock price", "weather"), I use advanced web search with LangChain
+        - I provide sources and confidence scores for web-retrieved information
+        
+        CRITICAL INSTRUCTION: When I provide you with data retrieval results (marked with [Local Data Retrieved] or [Web Data Retrieved]), you MUST:
+        1. Use ONLY the information provided in those results
+        2. Do NOT add any information not present in the search results
+        3. Do NOT make assumptions or fill in gaps with made-up information
+        4. If the search results are incomplete or unclear, say so honestly
+        5. Always acknowledge the sources provided and stick to the facts found
            
         If someone asks "can you perform a task for me?" or similar, respond conversationally by asking 
         what specific task they have in mind, rather than immediately trying to automate something.
@@ -1204,65 +1236,93 @@ class ChatBot:
         return user_message
 
     def _handle_data_retrieval(self, user_message: str) -> str:
-        """Handle ANY question using Universal Assistant - like talking to a smart friend."""
+        """Handle ANY question using integrated Local + Web retrieval system."""
         if not self.data_retrieval_available:
             return ""
             
         try:
-            # Use Universal Assistant to handle ANY question (single parameter)
-            result = self.universal_assistant.answer_anything(user_message)
+            local_result = None
+            web_result = None
             
-            # Format result for AI context
-            if result.get('success'):
-                return self._format_universal_context(result, user_message)
-            else:
-                # Even if failed, try to provide some context
-                error_msg = result.get('error', 'Could not retrieve data')
-                return f"[Attempted to retrieve data for: '{user_message}' but encountered: {error_msg}]"
+            # Step 1: Try local data retrieval first (system, commands, conversational)
+            if self.local_data_available and self.universal_assistant:
+                local_result = self.universal_assistant.answer_anything(user_message)
+                
+                # Check if local retrieval was successful and sufficient
+                if local_result.get('success'):
+                    query_type = local_result.get('query_type', 'unknown')
+                    
+                    # For system, command, and conversational queries, use local result
+                    if query_type in ['system', 'command', 'conversational']:
+                        local_result['source'] = 'local'
+                        return self._format_unified_context(local_result, user_message)
+            
+            # Step 2: Try web retrieval for live data, factual queries, or when local fails
+            if self.web_data_available and self.web_retrieval:
+                try:
+                    web_result = self.web_retrieval.get_answer_from_web(user_message)
+                    
+                    if web_result.get('success'):
+                        web_result['source'] = 'web'
+                        web_result['query_type'] = 'web_search'
+                        return self._format_unified_context(web_result, user_message)
+                        
+                except Exception as e:
+                    print(f"⚠️ Web retrieval failed: {e}")
+            
+            # Step 3: Fallback to local result if web failed
+            if local_result and local_result.get('success'):
+                local_result['source'] = 'local_fallback'
+                return self._format_unified_context(local_result, user_message)
+            
+            # Step 4: Ultimate fallback
+            return f"[Could not retrieve information for: '{user_message}'. Both local and web retrieval unavailable or failed.]"
                 
         except Exception as e:
             return f"[Data retrieval error: {str(e)}]"
     
-    def _format_universal_context(self, result: Dict[str, Any], original_query: str) -> str:
-        """Format Universal Assistant result into context for AI."""
+    def _format_unified_context(self, result: Dict[str, Any], original_query: str) -> str:
+        """Format result from either local or web retrieval into context for AI."""
         query_type = result.get('query_type', 'unknown')
         answer = result.get('answer', '')
+        source = result.get('source', 'unknown')
         
-        context_parts = [f"[Universal Assistant handled query: '{original_query}' (Type: {query_type})]"]
+        # Build context header based on source
+        if source == 'local':
+            context_header = f"[LOCAL DATA RETRIEVED FOR: '{original_query}']"
+        elif source == 'web':
+            context_header = f"[WEB DATA RETRIEVED FOR: '{original_query}']"
+            # Add source information for web results
+            sources = result.get('sources', [])
+            if sources:
+                source_count = len(sources)
+                context_header += f" (Sources: {source_count})"
+        else:
+            context_header = f"[DATA RETRIEVED FOR: '{original_query}' (Source: {source})]"
         
-        # Add the answer
+        # Start with clear instruction to AI
+        context_parts = [
+            context_header,
+            "INSTRUCTION: Use ONLY the information below. Do not add any details not present in this data.",
+            "=" * 60
+        ]
+        
+        # Add the answer with clear labeling
         if answer:
-            context_parts.append(f"Answer: {answer}")
+            context_parts.append(f"RETRIEVED INFORMATION:")
+            context_parts.append(answer)
+            context_parts.append("=" * 60)
         
-        # Add data context if available
-        data = result.get('data', {})
-        if data and isinstance(data, dict):
-            if 'command' in data:
-                context_parts.append(f"Command executed: {data['command']}")
-            if 'output' in data:
-                context_parts.append(f"Output: {data['output'][:200]}...")  # Truncate long outputs
-            if 'search_query' in data:
-                context_parts.append(f"Search performed: {data['search_query']}")
-            if 'sources' in result and result['sources']:
-                context_parts.append(f"Sources: {', '.join(result['sources'][:2])}...")  # Show first 2 sources
+        # Add source URLs for web results with clear labeling
+        if source == 'web' and result.get('sources'):
+            context_parts.append("SOURCES:")
+            for i, s in enumerate(result.get('sources', [])[:3], 1):
+                if s.get('url') and s.get('url') != 'https://duckduckgo.com':
+                    context_parts.append(f"{i}. {s.get('title', 'Unknown')} - {s.get('url', 'No URL')}")
+            context_parts.append("=" * 60)
         
-        # Add method information
-        methods_used = []
-        if result.get('web_search_performed'):
-            methods_used.append('web search')
-        if result.get('command_executed'):
-            methods_used.append('system command')
-        if result.get('system_info_used'):
-            methods_used.append('system info')
-        if result.get('context_used'):
-            methods_used.append('conversation context')
-        
-        if methods_used:
-            context_parts.append(f"Methods used: {', '.join(methods_used)}")
-        
-        # Browser fallback info
-        if result.get('browser_opened'):
-            context_parts.append("Browser opened for additional information")
+        # Final instruction
+        context_parts.append("REMINDER: Answer using ONLY the information above. Do not speculate or add extra details.")
         
         return "\n".join(context_parts)
     
