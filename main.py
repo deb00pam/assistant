@@ -97,13 +97,15 @@ except ImportError:
     OS_DETECTION_AVAILABLE = False
     print("Warning: OS detection not available")
 
-# Data Retrieval import
+# Data Retrieval import - New Local Data Retrieval
 try:
-    from data_retrieval import data_retriever, retrieve_data, scrape_web, execute_command, search_web, get_weather
+    from local_data_retrieval import universal_assistant, retrieve_data, get_system_info
     DATA_RETRIEVAL_AVAILABLE = True
+    print("✅ Universal Assistant loaded - Ready to answer ANY question!")
 except ImportError:
     DATA_RETRIEVAL_AVAILABLE = False
-    print("Warning: Data retrieval not available")
+    universal_assistant = None
+    print("Warning: Universal Assistant not available")
 
 
 # =============================================================================
@@ -419,13 +421,13 @@ class IntentClassifier:
 class GeminiClient:
     """Client for interacting with Google's Gemini AI API."""
     PREFERRED_MODELS = [
-        # Prioritize models less likely to hit quota limits
-        'gemini-1.5-flash',        # Stable, widely available
-        'gemini-1.5-flash-8b',     # Lightweight, good for quotas  
-        'gemini-1.5-pro',          # Reliable fallback
-        'gemini-2.0-flash',        # Newer but more stable than exp
-        'gemini-2.0-flash-exp',    # Experimental, likely to hit limits
-        'gemini-2.5-flash',        # Latest but may have quota issues
+        # Prioritize models with highest quota limits and best availability
+        'gemini-1.5-flash',        # Best quota: 1500 requests/day, most stable
+        'gemini-1.5-flash-8b',     # Good quota, lightweight, fast
+        'gemini-1.5-pro',          # 50 requests/day but very stable
+        'gemini-2.5-flash',        # Latest with good availability
+        'gemini-2.0-flash-exp',    # Experimental fallback
+        'gemini-2.0-flash',        # Lower quota: 200 requests/day, avoid if possible
     ]
 
     def __init__(self, api_key: Optional[str] = None, config: Optional[AssistantConfig] = None):
@@ -455,24 +457,37 @@ class GeminiClient:
 
         # Auto selection with quota-aware prioritization
         if requested == 'auto':
-            # Try each preferred model silently
+            print("🔍 Testing model availability...")
+            # Try each preferred model with feedback
             for candidate in self.PREFERRED_MODELS:
                 if candidate in model_names:
+                    print(f"  Testing {candidate}...")
                     if self._test_model_availability(candidate):
+                        print(f"✅ Selected {candidate} (available and working)")
                         return candidate
-                    else:
-                        print(f"Warning: {candidate} unavailable (likely quota exceeded)")
             
             # If all preferred models fail, try any available model
-            print("Trying alternative models...")
-            for name in model_names:
+            print("🔄 Trying alternative models...")
+            for name in sorted(model_names.keys()):
                 if any(keyword in name for keyword in ['flash', 'pro']) and name not in self.PREFERRED_MODELS:
+                    print(f"  Testing {name}...")
                     if self._test_model_availability(name):
-                        print(f"Found working alternative: {name}")
+                        print(f"✅ Found working alternative: {name}")
                         return name
         
-        # Fallback to most reliable model
-        print("Warning: Using fallback model (may have limited availability)")
+        # Final fallback to most reliable models
+        print("⚠️  All preferred models unavailable. Trying final fallbacks...")
+        fallback_models = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-pro']
+        
+        for fallback in fallback_models:
+            if fallback in model_names:
+                print(f"  Testing {fallback}...")
+                if self._test_model_availability(fallback):
+                    print(f"✅ Using fallback: {fallback}")
+                    return fallback
+        
+        # Last resort - return the most stable model even if untested
+        print("⚠️  Warning: Using untested fallback model (quota may be exceeded)")
         return 'gemini-1.5-flash'
     
     def _test_model_availability(self, model_name: str) -> bool:
@@ -481,22 +496,32 @@ class GeminiClient:
             # Create a temporary model instance to test
             test_model = genai.GenerativeModel(model_name)
             
-            # Try a simple generation request
+            # Try a simple generation request with minimal tokens
             with suppress_stderr():
                 response = test_model.generate_content("Hi", 
-                    generation_config=genai.types.GenerationConfig(max_output_tokens=1))
-            
-            return True  # If we get here, model is working
+                    generation_config=genai.types.GenerationConfig(
+                        max_output_tokens=1,
+                        temperature=0
+                    ))
+                # If we get any response, model is working
+                return response is not None
             
         except Exception as e:
             error_msg = str(e).lower()
-            if '429' in error_msg or 'quota' in error_msg or 'rate' in error_msg:
-                return False  # Quota exceeded
-            elif 'not found' in error_msg or 'unavailable' in error_msg:
-                return False  # Model not available
+            # Check for quota/rate limit errors
+            if any(keyword in error_msg for keyword in ['429', 'quota', 'rate limit', 'requests per']):
+                print(f"  {model_name}: Quota exceeded")
+                return False
+            # Check for model unavailable errors
+            elif any(keyword in error_msg for keyword in ['not found', 'unavailable', 'invalid']):
+                print(f"  {model_name}: Not available")
+                return False
             else:
-                # Other errors might be temporary, assume model is available
-                return True
+                # Other errors might be temporary or authentication issues
+                print(f"  {model_name}: Error - {str(e)[:50]}...")
+                return False
+        
+        return False
 
     def _select_model(self, requested: str) -> str:
         """Legacy method - kept for compatibility."""
@@ -868,7 +893,7 @@ class ChatBot:
         # Initialize data retrieval capabilities
         self.data_retrieval_available = DATA_RETRIEVAL_AVAILABLE
         if self.data_retrieval_available:
-            self.data_retriever = data_retriever
+            self.universal_assistant = universal_assistant
         
         # System prompt for the chatbot personality with OS context
         os_context = ""
@@ -926,8 +951,8 @@ class ChatBot:
             
             if search_query:
                 # Open browser
-                if self.data_retriever:
-                    browser_opened = self.data_retriever.open_browser_search(search_query)
+                if self.universal_assistant:
+                    browser_opened = self.universal_assistant.open_browser_search(search_query)
                     if browser_opened:
                         return f"Great! I've opened your browser and searched for '{search_query}'. You should see the results now."
                     else:
@@ -940,6 +965,11 @@ class ChatBot:
     def chat(self, user_message: str) -> str:
         """Process a conversational message and return a response."""
         try:
+            # Check for special commands
+            if user_message.lower().strip() in ['clear history', 'clear chat', 'reset conversation', 'new conversation']:
+                self.conversation_history = []
+                return "Conversation history cleared! We're starting fresh. 🧹"
+            
             # Check if this is a response to a browser suggestion first
             browser_response = self._handle_browser_request(user_message)
             if browser_response:
@@ -991,8 +1021,19 @@ class ChatBot:
                 return "I'm sorry, I couldn't generate a response right now. Please try again."
                 
         except Exception as e:
+            error_msg = str(e)
             logging.error(f"Chat error: {e}")
-            return f"I encountered an error: {str(e)}"
+            
+            # Special handling for quota/rate limit errors
+            if any(keyword in error_msg.lower() for keyword in ['429', 'quota', 'rate limit', 'requests per']):
+                return ("🚫 **API Quota Exceeded**\\n\\n"
+                       "I've hit the daily request limit for this model. Please try:\\n"
+                       "• Wait 24 hours for quota reset\\n"
+                       "• Restart and select a different model\\n"
+                       "• Use a paid Google AI API key for higher limits\\n\\n"
+                       f"Technical details: {error_msg[:100]}...")
+            else:
+                return f"I encountered an error: {error_msg}"
     
     def _build_conversation_context(self) -> str:
         """Build the conversation context for Gemini."""
@@ -1041,118 +1082,189 @@ class ChatBot:
         """Determine if text is a conversational query vs desktop automation command using NLP."""
         return self.intent_classifier.classify_intent(text)
     
-    def _handle_data_retrieval(self, user_message: str) -> str:
-        """Handle data retrieval requests and return context for AI."""
-        retrieval_keywords = [
-            'weather', 'news', 'google', 'search', 'find', 'look up', 
-            'check', 'what is', 'who is', 'when is', 'where is',
-            'scrape', 'get data', 'retrieve', 'fetch', 'command', 'run',
-            'cricket', 'match', 'score', 'live', 'playing', 'game', 'sport'
-        ]
-        
+    def _analyze_conversational_context(self, user_message: str) -> str:
+        """Analyze recent conversation history to understand references and context."""
         message_lower = user_message.lower()
         
-        # Check if the message contains retrieval keywords
-        needs_retrieval = any(keyword in message_lower for keyword in retrieval_keywords)
+        # Look for pronoun references that need context
+        pronoun_patterns = [
+            r'\bthey\b', r'\bthem\b', r'\btheir\b', r'\bit\b', r'\bthis\b', r'\bthat\b',
+            r'\bhe\b', r'\bshe\b', r'\bhim\b', r'\bher\b', r'\bhis\b', r'\bhers\b',
+            r'\bthere\b'
+        ]
         
-        if not needs_retrieval:
+        has_pronouns = any(re.search(pattern, message_lower) for pattern in pronoun_patterns)
+        
+
+        
+        if has_pronouns:
+            # Look back through recent conversation history for context
+            entities = []
+            
+            # Check last 10 messages for ANY entity references
+            recent_messages = self.conversation_history[-10:] if len(self.conversation_history) >= 10 else self.conversation_history
+            
+            for msg in recent_messages:
+                content = msg.get('content', '').lower()
+                
+                # Look for team names (prioritize actual club names)
+                football_clubs = [
+                    'manchester city', 'man city', 'arsenal', 'liverpool', 
+                    'chelsea', 'tottenham', 'spurs', 'united', 'manchester united',
+                    'barcelona', 'real madrid', 'psg', 'bayern', 'dortmund'
+                ]
+                
+                national_teams = [
+                    'india', 'pakistan', 'australia', 'england', 'south africa'
+                ]
+                
+                teams = football_clubs + national_teams
+                
+                # Look for places/locations
+                places = [
+                    'london', 'paris', 'new york', 'tokyo', 'delhi', 'mumbai',
+                    'berlin', 'madrid', 'rome', 'moscow', 'beijing', 'sydney',
+                    'los angeles', 'chicago', 'boston', 'seattle', 'miami',
+                    'france', 'germany', 'italy', 'spain', 'japan', 'china',
+                    'uk', 'usa', 'america', 'canada', 'australia', 'brazil'
+                ]
+                
+                # Look for people/celebrities
+                people = [
+                    'messi', 'ronaldo', 'neymar', 'mbappe', 'haaland',
+                    'biden', 'trump', 'modi', 'putin', 'xi jinping',
+                    'elon musk', 'bill gates', 'jeff bezos', 'mark zuckerberg'
+                ]
+                
+                # Look for companies/brands
+                companies = [
+                    'apple', 'google', 'microsoft', 'amazon', 'meta', 'facebook',
+                    'tesla', 'netflix', 'spotify', 'uber', 'airbnb', 'twitter', 'x'
+                ]
+                
+                # Look for movies/shows/books
+                entertainment = [
+                    'marvel', 'disney', 'netflix', 'hbo', 'game of thrones',
+                    'avengers', 'batman', 'superman', 'star wars', 'harry potter'
+                ]
+                
+                # Combine all entity lists (longer names first to avoid partial matches)
+                all_entities = sorted(teams + places + people + companies + entertainment, key=len, reverse=True)
+                
+                for entity in all_entities:
+                    if entity in content and entity not in entities and len(entity) > 1:
+                        entities.append(entity)
+            
+            # If we found entities and the user is asking about "them/they/it/this/that"
+            if entities:
+                # Prioritize based on context and pronouns
+                latest_entity = entities[-1]  # Default to most recent
+                
+                # Sports context: prioritize teams over countries when asking about "playing/matches"
+                if re.search(r'\b(they|them|their)\b', message_lower) and re.search(r'\b(playing|match|game|fixtures|next)\b', message_lower):
+                    # First look for football clubs, then national teams
+                    club_entities = [e for e in entities if e in football_clubs]
+                    if club_entities:
+                        latest_entity = club_entities[-1]  # Most recent club mentioned
+                    else:
+                        national_entities = [e for e in entities if e in national_teams]
+                        if national_entities:
+                            latest_entity = national_entities[-1]
+                
+                # People context: prefer people if asking about "him/her"
+                elif re.search(r'\b(he|she|him|her)\b', message_lower):
+                    person_entities = [e for e in entities if e in people]
+                    if person_entities:
+                        latest_entity = person_entities[-1]
+                        
+                # Location context: prefer cities if asking about "there"
+                elif re.search(r'\bthere\b', message_lower):
+                    place_entities = [e for e in entities if e in places]
+                    if place_entities:
+                        # Prefer specific cities over countries
+                        city_entities = [e for e in place_entities if e not in ['france', 'germany', 'italy', 'spain', 'japan', 'china', 'uk', 'usa', 'america', 'england', 'australia', 'brazil']]
+                        latest_entity = city_entities[-1] if city_entities else place_entities[-1]
+                
+                # Common question patterns that benefit from context
+                context_patterns = [
+                    r'when.*?(playing|happening|coming|starting|releasing)',
+                    r'what.*?(score|news|update|latest|new)',
+                    r'where.*?(located|based|from|playing)',
+                    r'how.*?(doing|performing|much|many)',
+                    r'tell me.*?(more|about|latest)',
+                    r'(latest|recent|new|current).*?(news|update|info)'
+                ]
+                
+                needs_context = any(re.search(pattern, message_lower) for pattern in context_patterns)
+                
+                if needs_context:
+                    enhanced_query = f"{latest_entity} {user_message}"
+                    return enhanced_query
+        
+        return user_message
+
+    def _handle_data_retrieval(self, user_message: str) -> str:
+        """Handle ANY question using Universal Assistant - like talking to a smart friend."""
+        if not self.data_retrieval_available:
             return ""
-        
+            
         try:
-            # Determine what kind of data retrieval is needed
-            retrieval_result = None
+            # Use Universal Assistant to handle ANY question (single parameter)
+            result = self.universal_assistant.answer_anything(user_message)
             
-            # Sports queries - prioritize these for real-time data
-            if any(sport in message_lower for sport in ['cricket', 'match', 'score', 'live', 'playing', 'game', 'vs']):
-                # Enhanced sports query detection
-                if 'india' in message_lower or 'pakistan' in message_lower or 'australia' in message_lower:
-                    sports_query = user_message + " live cricket score today"
-                else:
-                    sports_query = user_message + " live score"
-                retrieval_result = self.data_retriever.retrieve_data(sports_query, "api")
-            
-            # Weather queries - improved detection
-            elif re.search(r'\b(weather|temperature|forecast|climate)\b', message_lower):
-                # Try to extract location
-                location_patterns = [
-                    r'weather.*?(?:in|for|at)\s+([a-zA-Z\s,]+?)(?:\s|$|\?)',
-                    r'(?:get|check).*?weather.*?([a-zA-Z\s,]+?)(?:\s|$|\?)',
-                    r'weather.*?([a-zA-Z\s,]+?)(?:\s|$|\?)'
-                ]
-                
-                location = ""
-                for pattern in location_patterns:
-                    match = re.search(pattern, message_lower)
-                    if match:
-                        potential_location = match.group(1).strip()
-                        # Filter out common non-location words
-                        if len(potential_location) > 2 and not any(word in potential_location for word in ['like', 'today', 'tomorrow', 'now']):
-                            location = potential_location
-                            break
-                
-                retrieval_result = self.data_retriever.retrieve_data(f"weather in {location}", "api")
-            
-            # Web search queries
-            elif any(term in message_lower for term in ['google', 'search', 'look up', 'find']):
-                # Extract search term
-                search_patterns = [
-                    r'(?:google|search|look up|find)\s+(?:for\s+)?(.+?)(?:\s+on\s+google|\s+online|$)',
-                    r'what is\s+(.+?)(?:\?|$)',
-                    r'who is\s+(.+?)(?:\?|$)',
-                    r'when is\s+(.+?)(?:\?|$)',
-                    r'where is\s+(.+?)(?:\?|$)'
-                ]
-                
-                search_term = None
-                for pattern in search_patterns:
-                    match = re.search(pattern, message_lower)
-                    if match:
-                        search_term = match.group(1).strip()
-                        break
-                
-                if search_term:
-                    retrieval_result = self.data_retriever.retrieve_data(search_term, "search")
-            
-            # URL/web scraping
-            elif 'http' in message_lower or 'www.' in message_lower:
-                url_match = re.search(r'(https?://[^\s]+|www\.[^\s]+)', user_message)
-                if url_match:
-                    url = url_match.group(1)
-                    retrieval_result = self.data_retriever.retrieve_data(url, "web")
-            
-            # Command execution
-            elif any(cmd in message_lower for cmd in ['run', 'execute', 'command']):
-                # Extract command if it looks safe
-                command_patterns = [
-                    r'run\s+(.*?)(?:\s+command|$)',
-                    r'execute\s+(.*?)(?:\s+command|$)',
-                    r'command\s+(.*?)(?:$)'
-                ]
-                
-                command = None
-                for pattern in command_patterns:
-                    match = re.search(pattern, message_lower)
-                    if match:
-                        command = match.group(1).strip()
-                        break
-                
-                if command:
-                    retrieval_result = self.data_retriever.retrieve_data(command, "command")
-            
-            # Auto-detect method for other queries
+            # Format result for AI context
+            if result.get('success'):
+                return self._format_universal_context(result, user_message)
             else:
-                retrieval_result = self.data_retriever.retrieve_data(user_message, "auto")
-            
-            # Format the result for AI context
-            if retrieval_result and retrieval_result.get('success'):
-                return self._format_retrieval_context(retrieval_result, user_message)
-            elif retrieval_result:
-                return f"Data retrieval attempted but failed: {retrieval_result.get('error', 'Unknown error')}"
-            
+                # Even if failed, try to provide some context
+                error_msg = result.get('error', 'Could not retrieve data')
+                return f"[Attempted to retrieve data for: '{user_message}' but encountered: {error_msg}]"
+                
         except Exception as e:
-            return f"Data retrieval error: {str(e)}"
+            return f"[Data retrieval error: {str(e)}]"
+    
+    def _format_universal_context(self, result: Dict[str, Any], original_query: str) -> str:
+        """Format Universal Assistant result into context for AI."""
+        query_type = result.get('query_type', 'unknown')
+        answer = result.get('answer', '')
         
-        return ""
+        context_parts = [f"[Universal Assistant handled query: '{original_query}' (Type: {query_type})]"]
+        
+        # Add the answer
+        if answer:
+            context_parts.append(f"Answer: {answer}")
+        
+        # Add data context if available
+        data = result.get('data', {})
+        if data and isinstance(data, dict):
+            if 'command' in data:
+                context_parts.append(f"Command executed: {data['command']}")
+            if 'output' in data:
+                context_parts.append(f"Output: {data['output'][:200]}...")  # Truncate long outputs
+            if 'search_query' in data:
+                context_parts.append(f"Search performed: {data['search_query']}")
+            if 'sources' in result and result['sources']:
+                context_parts.append(f"Sources: {', '.join(result['sources'][:2])}...")  # Show first 2 sources
+        
+        # Add method information
+        methods_used = []
+        if result.get('web_search_performed'):
+            methods_used.append('web search')
+        if result.get('command_executed'):
+            methods_used.append('system command')
+        if result.get('system_info_used'):
+            methods_used.append('system info')
+        if result.get('context_used'):
+            methods_used.append('conversation context')
+        
+        if methods_used:
+            context_parts.append(f"Methods used: {', '.join(methods_used)}")
+        
+        # Browser fallback info
+        if result.get('browser_opened'):
+            context_parts.append("Browser opened for additional information")
+        
+        return "\n".join(context_parts)
     
     def _format_retrieval_context(self, result: Dict[str, Any], original_query: str) -> str:
         """Format retrieval result into context for AI."""
@@ -1242,8 +1354,8 @@ class ChatBot:
                         context_parts.append(f"Sports Search: No live matches found for '{original_query}'. Opening your browser to search for the latest information...")
                         
                         # Open browser with search
-                        if hasattr(self, 'data_retriever') and self.data_retriever:
-                            browser_opened = self.data_retriever.open_browser_search(f"{search_query} live score cricket")
+                        if hasattr(self, 'universal_assistant') and self.universal_assistant:
+                            browser_opened = self.universal_assistant.open_browser_search(f"{search_query} live score cricket")
                             if browser_opened:
                                 context_parts.append("Browser opened with your sports search query.")
                             else:
@@ -1980,9 +2092,18 @@ def interactive_mode():
     default_model = 'auto'
     if available:
         print(f"Available models: {', '.join(available)}")
-        print(f"Recommended: {available[0] if available else 'gemini-1.5-flash'}")
+        # Recommend the best model with quota info
+        recommended = available[0] if available else 'gemini-1.5-flash'
+        if 'gemini-1.5-flash' in available:
+            recommended = 'gemini-1.5-flash'
+            print(f"Recommended: {recommended} (1500 requests/day quota)")
+        elif 'gemini-1.5-flash-8b' in available:
+            recommended = 'gemini-1.5-flash-8b' 
+            print(f"Recommended: {recommended} (good quota limits)")
+        else:
+            print(f"Recommended: {recommended}")
     else:
-        print("Available models: Will be auto-selected")
+        print("Available models: Will be auto-selected with quota awareness")
         
     chosen = input(f"Choose model (or press Enter for {default_model}): ").strip() or default_model
     
