@@ -37,6 +37,9 @@ from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 from dataclasses import dataclass
 
+# Import translation utilities globally for consistent access
+from translation_utils import detect_language, translate_text
+
 # Global variable for selected voice
 SELECTED_VOICE_ID = None
 
@@ -140,6 +143,10 @@ class AssistantConfig:
     voice_timeout: float = 5.0  # Seconds to wait for speech input
     push_to_talk_key: str = "space"  # Key for push-to-talk mode
 
+    # Multilingual support
+    user_language: str = "auto"  # User's preferred language (e.g., 'en', 'es', 'fr', 'auto' for detect)
+    assistant_language: str = "en"  # Assistant's response language (default English)
+
 
 # =============================================================================
 # NLP Intent Classification
@@ -201,132 +208,176 @@ class IntentClassifier:
         try:
             # Training data: (text, label) where 0=automation, 1=conversation
             training_data = [
-                # Automation tasks (0)
-                ("open chrome browser", 0),
-                ("click on the button", 0),
-                ("type hello world", 0),
-                ("press enter key", 0),
-                ("scroll down page", 0),
-                ("launch notepad application", 0),
-                ("close window", 0),
-                ("minimize application", 0),
-                ("take screenshot", 0),
-                ("open file explorer", 0),
-                ("start calculator", 0),
-                ("run program", 0),
-                ("navigate to website", 0),
-                ("download file", 0),
-                ("save document", 0),
-                ("copy text", 0),
-                ("paste clipboard", 0),
-                ("delete file", 0),
-                ("install software", 0),
-                ("update application", 0),
-                ("switch to tab", 0),
-                ("maximize window", 0),
-                ("drag and drop", 0),
-                ("select all text", 0),
-                ("go to url", 0),
-                ("open edge", 0),
-                ("start spotify", 0),
-                ("launch terminal", 0),
-                ("execute command", 0),
-                ("find text", 0),
-                ("can you open edge", 0),
-                ("can you open chrome", 0),
-                ("open edge for me", 0),
-                ("like can you open edge", 0),
-                ("please open chrome", 0),
-                ("launch notepad please", 0),
-                ("start calculator for me", 0),
-                ("can you click the button", 0),
-                ("please type this text", 0),
-                ("can you scroll down", 0),
-                ("help me open firefox", 0),
-                ("open the browser", 0),
-                ("start the application", 0),
-                ("run the program", 0),
-                ("execute this command", 0),
-                ("launch spotify app", 0),
-                ("open file manager", 0),
-                ("start windows explorer", 0),
-                
-                # Conversational queries (1)
-                ("hello", 1),
-                ("hi", 1),
-                ("hey", 1),
-                ("hello there", 1),
-                ("hi there", 1),
-                ("hey there", 1),
-                ("good morning", 1),
-                ("good afternoon", 1),
-                ("good evening", 1),
-                ("how are you", 1),
-                ("what is your name", 1),
-                ("tell me a joke", 1),
-                ("how do you work", 1),
-                ("what can you do", 1),
-                ("explain machine learning", 1),
-                ("what do you think about", 1),
-                ("are you intelligent", 1),
-                ("do you have feelings", 1),
-                ("thanks for helping", 1),
-                ("you are awesome", 1),
-                ("good job well done", 1),
-                ("i love you", 1),
-                ("how was your day", 1),
-                ("what is the weather", 1),
-                ("tell me about science", 1),
-                ("why is sky blue", 1),
-                ("what time is it", 1),
-                ("who invented computer", 1),
-                ("recommend a movie", 1),
-                ("i feel sad today", 1),
-                ("you make me happy", 1),
-                ("goodbye see you later", 1),
-                ("hi there", 1),
-                ("hey buddy", 1),
-                ("thank you so much", 1),
-                ("amazing work", 1),
-                ("that was great", 1),
-                ("i think you are", 1),
-                ("do you believe in", 1),
-                ("what is meaning of life", 1),
-                ("tell me story", 1),
-                ("sing a song", 1),
-                ("make me laugh", 1),
-                ("i need emotional support", 1),
-                ("you are my friend", 1),
-                ("how old are you", 1),
-                ("where are you from", 1),
-                ("what are your hobbies", 1),
-                ("do you dream", 1),
-                ("are you lonely", 1),
-                ("what makes you happy", 1),
-                ("hiii", 1),
-                ("yeppppp", 1),
-                ("yeahhh", 1),
-                ("niceee", 1),
-                ("coollll", 1),
-                ("can you help me with something", 1),
-                ("what do you think about this", 1),
-                ("i want to ask you something", 1),
-                ("are you there", 1),
-                ("how smart are you", 1),
-                ("do you understand me", 1),
-                ("can you perform a task for me", 1),  # This should be conversational!
-                ("what task can you do", 1),
-                ("what kind of tasks", 1),
-                ("can you do work for me", 1),
-                ("help me with a task", 1),
-                ("i need help with task", 1),
-                ("what automation can you do", 1),
-                ("like batman is the prime example", 1),
-                ("batman sacrificed everything", 1),
-                ("like in the movie", 1),
-                ("like the character", 1),
-                ("this reminds me of", 1),
-            ]
+                    # Automation tasks (0)
+                    ("open chrome browser", 0),
+                    ("click on the button", 0),
+                    ("type hello world", 0),
+                    ("press enter key", 0),
+                    ("scroll down page", 0),
+                    ("launch notepad application", 0),
+                    ("close window", 0),
+                    ("minimize application", 0),
+                    ("take screenshot", 0),
+                    ("open file explorer", 0),
+                    ("start calculator", 0),
+                    ("run program", 0),
+                    ("navigate to website", 0),
+                    ("download file", 0),
+                    ("save document", 0),
+                    ("copy text", 0),
+                    ("paste clipboard", 0),
+                    ("delete file", 0),
+                    ("install software", 0),
+                    ("update application", 0),
+                    ("switch to tab", 0),
+                    ("maximize window", 0),
+                    ("drag and drop", 0),
+                    ("select all text", 0),
+                    ("go to url", 0),
+                    ("open edge", 0),
+                    ("start spotify", 0),
+                    ("launch terminal", 0),
+                    ("execute command", 0),
+                    ("find text", 0),
+                    ("can you open edge", 0),
+                    ("can you open chrome", 0),
+                    ("open edge for me", 0),
+                    ("like can you open edge", 0),
+                    ("please open chrome", 0),
+                    ("launch notepad please", 0),
+                    ("start calculator for me", 0),
+                    ("can you click the button", 0),
+                    ("please type this text", 0),
+                    ("can you scroll down", 0),
+                    ("help me open firefox", 0),
+                    ("open the browser", 0),
+                    ("start the application", 0),
+                    ("run the program", 0),
+                    ("execute this command", 0),
+                    ("launch spotify app", 0),
+                    ("open file manager", 0),
+                    ("start windows explorer", 0),
+                    # Local data fetch (2)
+                    ("show disk space", 2),
+                    ("how much memory is free", 2),
+                    ("what is the pc name", 2),
+                    ("system uptime", 2),
+                    ("list files in downloads", 2),
+                    ("show cpu usage", 2),
+                    ("get hardware info", 2),
+                    ("show battery status", 2),
+                    ("run command dir", 2),
+                    ("get windows version", 2),
+                    ("show network info", 2),
+                    ("get ip address", 2),
+                    ("show running processes", 2),
+                    ("show system info", 2),
+                    ("get local user accounts", 2),
+                    ("show available drives", 2),
+                    ("get bios version", 2),
+                    ("show ram details", 2),
+                    ("get motherboard info", 2),
+                    # Web data fetch (deep research) (3)
+                    ("what is the weather in kolkata", 3),
+                    ("tesla stock price today", 3),
+                    ("latest news headlines", 3),
+                    ("who won the cricket match", 3),
+                    ("bitcoin price now", 3),
+                    ("show me trending topics", 3),
+                    ("covid cases in india", 3),
+                    ("compare m3 vs ryzen 7 battery life reviews", 3),
+                    ("causes and fixes for windows 11 random freezes", 3),
+                    ("what happened at openai this year", 3),
+                    ("find python tutorials", 3),
+                    ("search for best laptops 2025", 3),
+                    ("show me live football scores", 3),
+                    ("weather in london right now", 3),
+                    ("tesla share price", 3),
+                    ("who is the president of france", 3),
+                    ("how tall is mount everest", 3),
+                    ("show me recent earthquakes", 3),
+                    ("find latest science discoveries", 3),
+                    ("show me apple earnings report", 3),
+                    ("find top movies this week", 3),
+                    ("show me sports news", 3),
+                    ("find github trending repos", 3),
+                    ("show me live weather radar", 3),
+                    ("find best restaurants near me", 3),
+                    # Conversational queries (1)
+                    ("hello", 1),
+                    ("hi", 1),
+                    ("hey", 1),
+                    ("hello there", 1),
+                    ("hi there", 1),
+                    ("hey there", 1),
+                    ("good morning", 1),
+                    ("good afternoon", 1),
+                    ("good evening", 1),
+                    ("how are you", 1),
+                    ("what is your name", 1),
+                    ("tell me a joke", 1),
+                    ("how do you work", 1),
+                    ("what can you do", 1),
+                    ("explain machine learning", 1),
+                    ("what do you think about", 1),
+                    ("are you intelligent", 1),
+                    ("do you have feelings", 1),
+                    ("thanks for helping", 1),
+                    ("you are awesome", 1),
+                    ("good job well done", 1),
+                    ("i love you", 1),
+                    ("how was your day", 1),
+                    ("tell me about science", 1),
+                    ("why is sky blue", 1),
+                    ("what time is it", 1),
+                    ("who invented computer", 1),
+                    ("recommend a movie", 1),
+                    ("i feel sad today", 1),
+                    ("you make me happy", 1),
+                    ("goodbye see you later", 1),
+                    ("hi there", 1),
+                    ("hey buddy", 1),
+                    ("thank you so much", 1),
+                    ("amazing work", 1),
+                    ("that was great", 1),
+                    ("i think you are", 1),
+                    ("do you believe in", 1),
+                    ("what is meaning of life", 1),
+                    ("tell me story", 1),
+                    ("sing a song", 1),
+                    ("make me laugh", 1),
+                    ("i need emotional support", 1),
+                    ("you are my friend", 1),
+                    ("how old are you", 1),
+                    ("where are you from", 1),
+                    ("what are your hobbies", 1),
+                    ("do you dream", 1),
+                    ("are you lonely", 1),
+                    ("what makes you happy", 1),
+                    ("hiii", 1),
+                    ("yeppppp", 1),
+                    ("yeahhh", 1),
+                    ("niceee", 1),
+                    ("coollll", 1),
+                    ("can you help me with something", 1),
+                    ("what do you think about this", 1),
+                    ("i want to ask you something", 1),
+                    ("are you there", 1),
+                    ("how smart are you", 1),
+                    ("do you understand me", 1),
+                    ("can you perform a task for me", 1),
+                    ("what task can you do", 1),
+                    ("what kind of tasks", 1),
+                    ("can you do work for me", 1),
+                    ("help me with a task", 1),
+                    ("i need help with task", 1),
+                    ("what automation can you do", 1),
+                    ("like batman is the prime example", 1),
+                    ("batman sacrificed everything", 1),
+                    ("like in the movie", 1),
+                    ("like the character", 1),
+                    ("this reminds me of", 1),
+                ]
             
             # Separate texts and labels
             texts = [self._preprocess_text(text) for text, label in training_data]
@@ -538,7 +589,13 @@ class GeminiClient:
     @staticmethod
     def list_available_models() -> List[str]:
         try:
-            return [m.name.split('/')[-1] for m in genai.list_models()]
+            # Only include generative models (filter out embedding, imagen, veo, etc.)
+            generative_keywords = ['flash', 'pro']
+            return [
+                m.name.split('/')[-1]
+                for m in genai.list_models()
+                if any(kw in m.name.split('/')[-1] for kw in generative_keywords)
+            ]
         except Exception as e:
             logging.error(f"Failed to list models: {e}")
             return []
@@ -995,77 +1052,183 @@ class ChatBot:
         return ""  # Not a browser request
 
     def chat(self, user_message: str) -> str:
-        """Process a conversational message and return a response."""
+        """Process a conversational message and return a response with multilingual support."""
+        from translation_utils import detect_language, translate_text
+        api_key = os.getenv('GOOGLE_TRANSLATE_API_KEY')
+        config = getattr(self, 'config', None)
+        user_lang = getattr(config, 'user_language', 'auto') if config else 'auto'
+
+        # Always detect user language for every input
         try:
-            # Check for special commands
-            if user_message.lower().strip() in ['clear history', 'clear chat', 'reset conversation', 'new conversation']:
-                self.conversation_history = []
-                return "Conversation history cleared! We're starting fresh. 🧹"
-            
-            # Check if this is a response to a browser suggestion first
-            browser_response = self._handle_browser_request(user_message)
-            if browser_response:
-                return browser_response
-            
-            # Add user message to history
-            self.conversation_history.append({
-                "role": "user",
-                "content": user_message,
-                "timestamp": datetime.now().isoformat()
-            })
-            
-            # Build conversation context
-            context = self._build_conversation_context()
-            
-            # Check if user query needs data retrieval
-            retrieval_context = ""
-            if self.data_retrieval_available:
-                retrieval_context = self._handle_data_retrieval(user_message)
-            
-            # Add retrieval context to the prompt if available
-            if retrieval_context:
-                context += f"\n\nREAL-TIME DATA CONTEXT:\n{retrieval_context}\n"
-            
-            # Generate response using Gemini
-            with suppress_stderr():
-                response = self.gemini_client.model.generate_content(context)
-            
-            if response and response.text:
-                bot_response = response.text.strip()
-                
-                # Clean up any hidden markers from the response
-                if 'BROWSER_SEARCH_PENDING:' in bot_response:
-                    bot_response = bot_response.split('BROWSER_SEARCH_PENDING:')[0].strip()
-                
-                # Add bot response to history (store both context and clean response)
-                self.conversation_history.append({
-                    "role": "assistant", 
-                    "content": context if 'BROWSER_SEARCH_PENDING:' in context else bot_response,  # Store context if it has markers
-                    "response": bot_response,  # Always store clean response
-                    "timestamp": datetime.now().isoformat()
-                })
-                
-                # Trim history if too long
-                self._trim_history()
-                
-                return bot_response
-            else:
-                return "I'm sorry, I couldn't generate a response right now. Please try again."
-                
-        except Exception as e:
-            error_msg = str(e)
-            logging.error(f"Chat error: {e}")
-            
-            # Special handling for quota/rate limit errors
-            if any(keyword in error_msg.lower() for keyword in ['429', 'quota', 'rate limit', 'requests per']):
-                return ("🚫 **API Quota Exceeded**\\n\\n"
-                       "I've hit the daily request limit for this model. Please try:\\n"
-                       "• Wait 24 hours for quota reset\\n"
-                       "• Restart and select a different model\\n"
-                       "• Use a paid Google AI API key for higher limits\\n\\n"
-                       f"Technical details: {error_msg[:100]}...")
-            else:
-                return f"I encountered an error: {error_msg}"
+            detected_lang = detect_language(user_message, api_key)
+            print(f"[DEBUG] Detected user language: {detected_lang}")
+        except Exception:
+            detected_lang = 'en'
+            print("[DEBUG] Language detection failed, defaulting to 'en'")
+
+        # Heuristic for transliterated Bengali/Hindi (Benglish/Hinglish)
+        def is_benglish(text):
+            # Common Bengali words written in English
+            bengali_keywords = ['bhalo', 'achis', 'tor', 'amar', 'kemon', 'ki', 'tui', 'korchis', 'kothay', 'khub', 'shob', 'shotti', 'bondhu', 'dost', 'pagol', 'khub', 'khushi', 'shobai']
+            return any(word in text.lower() for word in bengali_keywords)
+
+        def is_hinglish(text):
+            # Common Hindi words written in English
+            hindi_keywords = ['hai', 'kya', 'kaise', 'tum', 'mera', 'tera', 'acha', 'bura', 'dost', 'pyaar', 'shukriya', 'namaste', 'bhai', 'bahut', 'accha', 'kyun', 'kyon', 'sab', 'theek']
+            return any(word in text.lower() for word in hindi_keywords)
+
+        # If language detection says English but it's actually Ben/Hinglish, override
+        if detected_lang == 'en':
+            if is_benglish(user_message):
+                detected_lang = 'benglish'
+                print('[DEBUG] Heuristic: Detected BenGlish (Bengali in English script)')
+            elif is_hinglish(user_message):
+                detected_lang = 'hinglish'
+                print('[DEBUG] Heuristic: Detected Hinglish (Hindi in English script)')
+
+        # Always translate user message to English for Gemini
+        processed_message = user_message
+        if detected_lang != 'en':
+            try:
+                processed_message = translate_text(user_message, target='en', source=detected_lang, api_key=api_key)
+                print(f"[DEBUG] User input translated to English: {processed_message}")
+            except Exception:
+                processed_message = user_message
+                print(f"[DEBUG] User input translation failed, using original: {processed_message}")
+
+        # Check for special commands
+        if processed_message.lower().strip() in ['clear history', 'clear chat', 'reset conversation', 'new conversation']:
+            self.conversation_history = []
+            return translate_text("Conversation history cleared! We're starting fresh. 🧹", target=detected_lang, api_key=api_key) if detected_lang != 'en' else "Conversation history cleared! We're starting fresh. 🧹"
+
+        # Check if this is a response to a browser suggestion first
+        browser_response = self._handle_browser_request(processed_message)
+        if browser_response:
+            return translate_text(browser_response, target=detected_lang, api_key=api_key) if detected_lang != 'en' else browser_response
+
+        # Add user message to history
+        self.conversation_history.append({
+            "role": "user",
+            "content": user_message,
+            "timestamp": datetime.now().isoformat()
+        })
+
+        # Build conversation context
+        context = self._build_conversation_context()
+
+        # Check if user query needs data retrieval
+        retrieval_context = ""
+        if self.data_retrieval_available:
+            retrieval_context = self._handle_data_retrieval(processed_message)
+
+        # Add retrieval context to the prompt if available
+        if retrieval_context:
+            context += f"\n\nREAL-TIME DATA CONTEXT:\n{retrieval_context}\n"
+
+        # Generate response using Gemini, retrying with other models if quota/rate limit error occurs
+        tried_models = set()
+        last_error = None
+        available_models = self.gemini_client.list_available_models() if hasattr(self.gemini_client, 'list_available_models') else []
+        # Always try the current model first
+        current_model = getattr(self.gemini_client.model, 'model_name', None) or getattr(self.gemini_client.model, 'name', None)
+        if current_model:
+            available_models = [current_model] + [m for m in available_models if m != current_model]
+        for model_name in available_models:
+            try:
+                if model_name != current_model:
+                    # Switch to new model
+                    with suppress_stderr():
+                        self.gemini_client.model = genai.GenerativeModel(model_name)
+                with suppress_stderr():
+                    response = self.gemini_client.model.generate_content(context)
+                if response and response.text:
+                    bot_response = response.text.strip()
+                    # Clean up any hidden markers from the response
+                    if 'BROWSER_SEARCH_PENDING:' in bot_response:
+                        bot_response = bot_response.split('BROWSER_SEARCH_PENDING:')[0].strip()
+                    # Add bot response to history (store both context and clean response)
+                    self.conversation_history.append({
+                        "role": "assistant",
+                        "content": context if 'BROWSER_SEARCH_PENDING:' in context else bot_response,
+                        "response": bot_response,
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    self._trim_history()
+                    # Always translate Gemini's reply back to the user's detected language
+                    if detected_lang and detected_lang != 'en':
+                        print(f"[DEBUG] Translating Gemini reply to: {detected_lang}")
+                        try:
+                            # Always transliterate Bengali and Hindi replies to English script
+                            if detected_lang in ['bn', 'benglish']:
+                                print(f"[DEBUG] Always replying in BenGlish style (English script Bengali)")
+                                from indic_transliteration.sanscript import transliterate
+                                from indic_transliteration.sanscript import BENGALI, ITRANS
+                                bengali_text = translate_text(bot_response, target='bn', source='en', api_key=api_key)
+                                benglish = transliterate(bengali_text, BENGALI, ITRANS)
+                                print(f"[DEBUG] BenGlish transliteration: {benglish}")
+                                return benglish
+                            elif detected_lang in ['hi', 'hinglish']:
+                                print(f"[DEBUG] Always replying in Hinglish style (English script Hindi)")
+                                from indic_transliteration.sanscript import transliterate
+                                from indic_transliteration.sanscript import DEVANAGARI, ITRANS
+                                hindi_text = translate_text(bot_response, target='hi', source='en', api_key=api_key)
+                                hinglish = transliterate(hindi_text, DEVANAGARI, ITRANS)
+                                print(f"[DEBUG] Hinglish transliteration: {hinglish}")
+                                return hinglish
+                            else:
+                                translated = translate_text(bot_response, target=detected_lang, source='en', api_key=api_key)
+                                print(f"[DEBUG] Translated response: {translated}")
+                                return translated
+                        except Exception as ex:
+                            print(f"[DEBUG] Translation failed: {ex}")
+                            return bot_response
+                    return bot_response
+                else:
+                    last_error = "I'm sorry, I couldn't generate a response right now. Please try again."
+                    break
+            except Exception as e:
+                error_msg = str(e)
+                last_error = error_msg
+                if any(keyword in error_msg.lower() for keyword in ['429', 'quota', 'rate limit', 'requests per']):
+                    tried_models.add(model_name)
+                    continue  # Try next model
+                else:
+                    logging.error(f"Chat error: {e}")
+                    return f"I encountered an error: {error_msg}"
+        # If all models exhausted or only quota errors
+        if last_error and any(keyword in last_error.lower() for keyword in ['429', 'quota', 'rate limit', 'requests per']):
+            msg = ("🚫 **API Quota Exceeded**\n\n"
+                   "I've hit the daily request limit for all available models. Please try:\n"
+                   "• Wait 24 hours for quota reset\n"
+                   "• Use a paid Google AI API key for higher limits\n\n"
+                   f"Technical details: {last_error[:100]}...")
+            if detected_lang and detected_lang != 'en':
+                print(f"[DEBUG] Translating error message to: {detected_lang}")
+                try:
+                    return translate_text(msg, target=detected_lang, api_key=api_key)
+                except Exception as ex:
+                    print(f"[DEBUG] Translation failed: {ex}")
+                    return msg
+            return msg
+        elif last_error:
+            if detected_lang and detected_lang != 'en':
+                print(f"[DEBUG] Translating error message to: {detected_lang}")
+                try:
+                    return translate_text(f"I encountered an error: {last_error}", target=detected_lang, api_key=api_key)
+                except Exception as ex:
+                    print(f"[DEBUG] Translation failed: {ex}")
+                    return f"I encountered an error: {last_error}"
+            return f"I encountered an error: {last_error}"
+        else:
+            fallback_msg = "I'm sorry, I couldn't generate a response right now. Please try again."
+            if detected_lang and detected_lang != 'en':
+                print(f"[DEBUG] Translating fallback message to: {detected_lang}")
+                try:
+                    return translate_text(fallback_msg, target=detected_lang, api_key=api_key)
+                except Exception as ex:
+                    print(f"[DEBUG] Translation failed: {ex}")
+                    return fallback_msg
+            return fallback_msg
     
     def _build_conversation_context(self) -> str:
         """Build the conversation context for Gemini."""
