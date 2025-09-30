@@ -36,6 +36,10 @@ from io import BytesIO
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 from dataclasses import dataclass
+from user_data_utils import load_user_data, save_user_data
+
+# Load user data at startup
+USER_DATA = load_user_data()
 
 # Import translation utilities globally for consistent access
 from translation_utils import detect_language, translate_text
@@ -946,6 +950,11 @@ class GUIAutomator:
 
 
 class ChatBot:
+    def save_user_state(self):
+        # Save relevant user data (extend as needed)
+        USER_DATA['last_conversation_history'] = self.conversation_history
+        USER_DATA['last_used'] = datetime.now().isoformat()
+        save_user_data(USER_DATA)
     """Conversational chatbot using Gemini AI for natural language interactions."""
     
     def __init__(self, gemini_client: GeminiClient):
@@ -1112,6 +1121,7 @@ class ChatBot:
             "content": user_message,
             "timestamp": datetime.now().isoformat()
         })
+        self.save_user_state()
 
         # Build conversation context
         context = self._build_conversation_context()
@@ -1154,6 +1164,7 @@ class ChatBot:
                         "timestamp": datetime.now().isoformat()
                     })
                     self._trim_history()
+                    self.save_user_state()
                     # Always translate Gemini's reply back to the user's detected language
                     if detected_lang and detected_lang != 'en':
                         print(f"[DEBUG] Translating Gemini reply to: {detected_lang}")
