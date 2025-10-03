@@ -13,7 +13,7 @@ from typing import Dict, List, Any, Optional
 
 # Import required components with fallbacks
 try:
-    from llm.gemini_client import GeminiClient
+    from llm.gemini.client import GeminiClient
 except ImportError:
     GeminiClient = None
 
@@ -23,7 +23,7 @@ except ImportError:
     VoiceHandler = None
 
 try:
-    from automation.screen import ScreenAnalyzer
+    from automation.gui import ScreenAnalyzer
 except ImportError:
     ScreenAnalyzer = None
 
@@ -111,12 +111,8 @@ class DesktopAssistant:
         self.task_progress = []
         self.is_running = True
         
-        # Check if this is a multi-step task
-        multi_step_indicators = [
-            'and', 'then', 'check for', 'download', 'install', 'update', 
-            'click on', 'navigate to', 'find', 'search for', 'select'
-        ]
-        is_multi_step = any(indicator in task_description.lower() for indicator in multi_step_indicators)
+        # Let Gemini AI determine if task requires multiple steps
+        is_multi_step = len(task_description.split()) > 5  # Simple heuristic
         
         if is_multi_step:
             logging.info("Detected multi-step task - will use iterative approach")
@@ -226,29 +222,8 @@ class DesktopAssistant:
         return [a for a in actions if a.get('description','').lower() not in existing]
 
     def _infer_next_step(self, original_task: str) -> Optional[Dict[str, Any]]:
-        t = original_task.lower()
-        if any(k in t for k in ['youtube','play','video','song']):
-            # If search submitted but no video clicked, click first video
-            submitted = any(
-                ('submit search' in (r.get('action', {}).get('description','').lower()) or
-                 'submit youtube search' in (r.get('action', {}).get('description','').lower())) and r.get('success')
-                for r in self.task_progress
-            )
-            clicked_video = any('click first youtube video' in (r.get('action', {}).get('description','').lower()) for r in self.task_progress)
-            if submitted and not clicked_video:
-                try:
-                    if pyautogui:
-                        screen_w, screen_h = pyautogui.size()
-                    else:
-                        screen_w, screen_h = 1920, 1080
-                except Exception:
-                    screen_w, screen_h = 1920,1080
-                return {
-                    'action_type':'click',
-                    'coordinates':[int(screen_w*0.25), int(screen_h*0.35)],
-                    'description':'Click first YouTube video result (inferred)'
-                }
-        return None
+        # Let Gemini AI infer next steps intelligently
+        return None  # Gemini will handle continuation logic
     
     def _execute_single_step_task(self, task_description: str) -> Dict[str, Any]:
         """Execute a simple single-step task (original behavior)."""
@@ -275,51 +250,7 @@ class DesktopAssistant:
             actions = analysis.get("actions", [])
             logging.info(f"AI generated {len(actions)} actions: {[a.get('description', 'No desc') for a in actions]}")
             
-            # Check if this is a browser + website task and AI didn't include navigation steps
-            if any(word in task_description.lower() for word in ['go to', '.com', '.org', '.net', 'website']) and \
-               not any('ctrl+l' in str(action).lower() or 'address' in str(action).lower() for action in actions):
-                
-                logging.info("Detected website navigation task, adding browser navigation steps")
-                
-                # Extract website from task
-                import re
-                websites = re.findall(r'([\w.-]+\.(?:com|org|net|edu|gov))', task_description.lower())
-                if websites:
-                    website = websites[0]
-                    logging.info(f"Extracted website: {website}")
-                    
-                    # Find where to insert Ctrl+L before typing the website
-                    for i, action in enumerate(actions):
-                        if action.get("action_type") == "type" and website in action.get("text", ""):
-                            # Insert Ctrl+L before typing the website
-                            actions.insert(i, {
-                                "action_type": "key_press",
-                                "key": "ctrl+l", 
-                                "description": "Focus address bar with Ctrl+L"
-                            })
-                            logging.info("Added Ctrl+L before typing website URL")
-                            break
-                    
-                    # Add navigation actions if needed
-                    navigation_actions = [
-                        {
-                            "action_type": "key_press", 
-                            "key": "ctrl+l",
-                            "description": "Focus address bar with Ctrl+L"
-                        },
-                        {
-                            "action_type": "type",
-                            "text": website,
-                            "description": f"Type website URL: {website}"
-                        },
-                        {
-                            "action_type": "key_press",
-                            "key": "enter", 
-                            "description": "Press Enter to navigate"
-                        }
-                    ]
-                    actions.extend(navigation_actions)
-                    logging.info(f"Added {len(navigation_actions)} navigation actions")
+            # Let Gemini handle browser navigation intelligently without hardcoded patterns
             
             results = self._execute_action_sequence(actions)
             

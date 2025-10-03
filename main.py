@@ -33,13 +33,20 @@ from io import BytesIO
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 from dataclasses import dataclass
-from data.storage import load_user_data, save_user_data
+from automation.storage import load_user_data, save_user_data
 
 # Load user data at startup
 USER_DATA = load_user_data()
 
-# Import translation utilities globally for consistent access
-from ai.translation import detect_language, translate_text
+# Import translation utilities - now powered by Gemini AI!
+try:
+    from llm.gemini.translation import detect_language, translate_text
+    TRANSLATION_AVAILABLE = True
+except Exception as e:
+    TRANSLATION_AVAILABLE = False
+    print(f"Translation not available: {e}")
+    # Create fallback functions
+# Translation now handled by llm.gemini.translation module
 
 # Global variable for selected voice
 SELECTED_VOICE_ID = None
@@ -82,15 +89,18 @@ except ImportError:
     SKLEARN_AVAILABLE = False
     print("Warning: NLP libraries not installed. Using basic keyword detection. Install with: pip install scikit-learn nltk")
 
-# Import IntentClassifier from intent_classifier.py
+# Note: Traditional IntentClassifier (PostgreSQL-based) is no longer used
+# We now use GeminiIntentClassifier for AI-powered intent classification
+
+# Import GeminiIntentClassifier for AI-powered intent classification
 try:
-    from ai.intent_classifier import IntentClassifier
+    from llm.gemini.intent_classifier import GeminiIntentClassifier
 except ImportError:
-    IntentClassifier = None
+    GeminiIntentClassifier = None
 
 # Import GeminiClient from llm package
 try:
-    from llm.gemini_client import GeminiClient
+    from llm.gemini.client import GeminiClient
 except ImportError:
     GeminiClient = None
 
@@ -113,27 +123,24 @@ except ImportError:
 
 # OS Detection import
 try:
-    from utils.os_detection import get_os_context, get_os_commands, os_detector
+    from automation.os_detection import get_os_context, get_os_commands, os_detector
     OS_DETECTION_AVAILABLE = True
 except ImportError:
     OS_DETECTION_AVAILABLE = False
     print("Warning: OS detection not available")
 
-# Data Retrieval import - Local + Web Retrieval Integration
+# Data Retrieval import - Gemini AI powered local data retrieval
 try:
-    from data.local_retrieval import universal_assistant, retrieve_data, get_system_info
+    from llm.gemini.local_retrieval import GeminiLocalDataRetriever
     LOCAL_DATA_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     LOCAL_DATA_AVAILABLE = False
-    universal_assistant = None
+    print(f"Gemini local data retrieval not available: {e}")
+    GeminiLocalDataRetriever = None
 
-# Web Data Retrieval import - LangChain powered
-try:
-    from data.web_retrieval import web_retrieval, get_web_answer, search_web
-    WEB_DATA_AVAILABLE = True
-except ImportError:
-    WEB_DATA_AVAILABLE = False
-    web_retrieval = None
+# Web Data Retrieval - Now using Gemini AI (llm/gemini_web_retrieval.py)
+# Legacy data.web_retrieval module removed - using Gemini AI instead
+WEB_DATA_AVAILABLE = True  # Gemini web retrieval is always available
 
 # Combined availability
 DATA_RETRIEVAL_AVAILABLE = LOCAL_DATA_AVAILABLE or WEB_DATA_AVAILABLE
@@ -151,7 +158,7 @@ except ImportError:
 
 # Import ChatBot from chatbot.py
 try:
-    from ai.chatbot import ChatBot
+    from core.chatbot import ChatBot
 except ImportError:
     ChatBot = None
 
@@ -315,9 +322,16 @@ def interactive_mode():
     
     # Initialize assistant and chatbot
     try:
-
         assistant = DesktopAssistant(config)
         chatbot = ChatBot(assistant.gemini_client)
+        
+        # Initialize Gemini Intent Classifier using the same model as assistant
+        if GeminiIntentClassifier:
+            gemini_intent_classifier = GeminiIntentClassifier(gemini_client=assistant.gemini_client)
+        else:
+            gemini_intent_classifier = None
+            print("Gemini Intent Classifier not available, using fallback")
+            
         pass  # Clean startup - no system messages
     except Exception as e:
         print(f"Error: Failed to initialize Truvo: {e}")
@@ -373,10 +387,23 @@ def interactive_mode():
                 start_interactive_voice_mode(assistant, chatbot)
                 continue
             
-            # Determine if this is a conversation or automation task using NLP
-            is_chat = chatbot.is_conversational_query(user_input)
+            # NEW: Use 4-way AI-powered intent classification
+            if gemini_intent_classifier:
+                try:
+                    intent = gemini_intent_classifier.classify_intent(user_input)
+                except Exception as e:
+                    # Fallback to conversation on classification error
+                    intent = "conversation"
+            else:
+                # Use GeminiIntentClassifier for proper intent detection
+                try:
+                    intent_result = intent_classifier.classify_with_confidence(user_input)
+                    intent = intent_result.get('intent', 'conversation')
+                except Exception:
+                    intent = "conversation"  # Safe fallback
             
-            if is_chat:
+            # Handle based on intent type
+            if intent == "conversation":
                 # Handle as conversation
                 response = chatbot.chat(user_input)
                 print(f"Truvo: {response}")
@@ -384,7 +411,8 @@ def interactive_mode():
                 # Voice response if voice is enabled (silent)
                 if assistant.voice_handler and assistant.voice_handler.is_available:
                     assistant.voice_handler.speak(response)
-            else:
+                    
+            elif intent == "automation":
                 # Handle as automation task
                 result = assistant.execute_task(user_input)
                 
@@ -394,12 +422,40 @@ def interactive_mode():
                     print(f"SUCCESS - Task completed!")
                     print(f"   Actions: {result['actions_completed']}/{result['total_actions']}")
                 else:
-                    print(f"FAILED - {result.get('error', 'Unknown error')}")
-                    print(f"   Actions completed: {result['actions_completed']}")
-                    
-                    if result.get("safety_concerns"):
-                        print(f"Safety concerns: {', '.join(result['safety_concerns'])}")
+                    print(f"FAILED - {result['error']}")
+                    if result['actions_completed'] > 0:
+                        print(f"   Partial completion: {result['actions_completed']}/{result['total_actions']}")
                 print("="*60)
+                
+            elif intent == "local_data_retrieval":
+                # Handle local data search using Gemini AI
+                try:
+                    if LOCAL_DATA_AVAILABLE:
+                        # Create Gemini local data retriever (share the same model as assistant)
+                        local_retriever = GeminiLocalDataRetriever(gemini_client=assistant.gemini_client)
+                        response = local_retriever.retrieve_local_data(user_input)
+                    else:
+                        print("Gemini local data retrieval not available. Check dependencies.")
+                except Exception as e:
+                    print(f"Gemini local data retrieval failed: {e}")
+                    # Fallback to conversation
+                    response = chatbot.chat(user_input)
+                    print(f"Truvo: {response}")
+                    
+            elif intent == "web_data_retrieval":
+                # Handle web search using Gemini AI
+                try:
+                    from llm.gemini.web_retrieval import web_search
+                    response = web_search(user_input, gemini_client=assistant.gemini_client)
+                except Exception as e:
+                    # Fallback to conversation
+                    response = chatbot.chat(user_input)
+                    print(f"Truvo: {response}")
+                    
+            else:
+                # Fallback - treat as conversation
+                response = chatbot.chat(user_input)
+                print(f"Truvo: {response}")
             
         except KeyboardInterrupt:
             print("\n\nTask interrupted by user")
@@ -579,8 +635,13 @@ def start_continuous_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
             assistant.voice_handler.speak("Voice mode disabled. Returning to text mode.")
             return
         
-        # Process the voice input
-        is_chat = chatbot.is_conversational_query(text)
+        # Process the voice input using proper intent classification
+        try:
+            intent_result = intent_classifier.classify_with_confidence(text)
+            intent = intent_result.get('intent', 'conversation')
+            is_chat = intent == 'conversation'
+        except Exception:
+            is_chat = True  # Safe fallback to conversation
         
         if is_chat:
             print("Processing...")
@@ -652,7 +713,13 @@ def start_interactive_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
                 break
             
             # Process input
-            is_chat = chatbot.is_conversational_query(text)
+            # Classify the input properly
+            try:
+                intent_result = intent_classifier.classify_with_confidence(text)
+                intent = intent_result.get('intent', 'conversation')
+                is_chat = intent == 'conversation'
+            except Exception:
+                is_chat = True  # Safe fallback to conversation
             
             if is_chat:
                 response = chatbot.chat(text)
@@ -710,7 +777,13 @@ def handle_voice_input(assistant: DesktopAssistant, chatbot: ChatBot):
         print(f"Voice input: {text}")
         
         # Process the voice input like regular text input
-        is_chat = chatbot.is_conversational_query(text)
+        # Classify the input properly  
+        try:
+            intent_result = intent_classifier.classify_with_confidence(text)
+            intent = intent_result.get('intent', 'conversation')
+            is_chat = intent == 'conversation'
+        except Exception:
+            is_chat = True  # Safe fallback to conversation
         
         if is_chat:
             # Handle as conversation

@@ -1,12 +1,15 @@
 """
-GUI Automator - GUI automation for Truvo
+GUI Automator and Screen Analyzer - GUI automation and screen capture for Truvo
 
-This module handles automated GUI interactions like clicking, typing, and scrolling.
+This module handles automated GUI interactions like clicking, typing, scrolling,
+and screen capture functionality.
 """
 
+import os
 import time
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
+from datetime import datetime
 
 # Import dependencies with fallbacks
 try:
@@ -14,6 +17,43 @@ try:
 except ImportError:
     print("Warning: pyautogui not installed. Install with: pip install pyautogui")
     pyautogui = None
+
+try:
+    from PIL import Image
+except ImportError:
+    print("Warning: PIL not installed. Install with: pip install Pillow")
+    Image = None
+
+
+class ScreenAnalyzer:
+    """Handles screen capture and visual analysis."""
+    
+    def __init__(self, screenshot_dir: str = "screenshots"):
+        self.screenshot_dir = screenshot_dir
+        os.makedirs(screenshot_dir, exist_ok=True)
+        if pyautogui:
+            pyautogui.FAILSAFE = False  # Disable fail-safe for automation
+            pyautogui.PAUSE = 0.1
+        
+    def capture_screenshot(self, save: bool = True):
+        """Capture a screenshot of the entire screen."""
+        if not pyautogui:
+            raise RuntimeError("pyautogui is not installed")
+            
+        try:
+            screenshot = pyautogui.screenshot()
+            
+            if save:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filepath = os.path.join(self.screenshot_dir, f"screenshot_{timestamp}.png")
+                screenshot.save(filepath)
+                logging.info(f"Screenshot saved to {filepath}")
+                
+            return screenshot
+            
+        except Exception as e:
+            logging.error(f"Error capturing screenshot: {e}")
+            raise
 
 
 class GUIAutomator:

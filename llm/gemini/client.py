@@ -38,7 +38,7 @@ class AssistantConfig:
 
 # Try to import OS detection
 try:
-    from utils.os_detection import get_os_context, get_os_commands, os_detector
+    from automation.os_detection import get_os_context, get_os_commands, os_detector
     OS_DETECTION_AVAILABLE = True
 except ImportError:
     get_os_context = None
@@ -86,17 +86,13 @@ class GeminiClient:
 
         # Auto selection with quota-aware prioritization
         if requested == 'auto':
-            print("Testing model availability...")
-            # Try each preferred model with feedback
+            # Try each preferred model silently
             for candidate in self.PREFERRED_MODELS:
                 if candidate in model_names:
-                    print(f"  Testing {candidate}...")
                     if self._test_model_availability(candidate):
-                        print(f"Selected {candidate} (available and working)")
                         return candidate
             
             # If all preferred models fail, try any available model
-            print("Trying alternative models...")
             for name in sorted(model_names.keys()):
                 if any(keyword in name for keyword in ['flash', 'pro']) and name not in self.PREFERRED_MODELS:
                     print(f"  Testing {name}...")
