@@ -4,6 +4,9 @@ pillow>=9.0.0
 opencv-python>=4.8.0
 numpy>=1.21.0
 
+# Database support
+psycopg2-binary>=2.9.0  # PostgreSQL support (required)
+
 # GUI automation
 pyautogui>=0.9.54
 pynput>=1.7.6

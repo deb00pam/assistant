@@ -119,7 +119,7 @@ class DesktopAssistant:
         is_multi_step = any(indicator in task_description.lower() for indicator in multi_step_indicators)
         
         if is_multi_step:
-            logging.info("🔄 Detected multi-step task - will use iterative approach")
+            logging.info("Detected multi-step task - will use iterative approach")
             return self._execute_multi_step_task(task_description)
         else:
             logging.info("Single-step task - using standard approach")
@@ -133,7 +133,7 @@ class DesktopAssistant:
         
         try:
             for iteration in range(max_iterations):
-                logging.info(f"🔄 Multi-step iteration {iteration + 1}/{max_iterations}")
+                logging.info(f"Multi-step iteration {iteration + 1}/{max_iterations}")
                 
                 # Take screenshot of current state
                 screenshot = self.screen_analyzer.capture_screenshot()

@@ -86,26 +86,26 @@ class GeminiClient:
 
         # Auto selection with quota-aware prioritization
         if requested == 'auto':
-            print("🔍 Testing model availability...")
+            print("Testing model availability...")
             # Try each preferred model with feedback
             for candidate in self.PREFERRED_MODELS:
                 if candidate in model_names:
                     print(f"  Testing {candidate}...")
                     if self._test_model_availability(candidate):
-                        print(f"✅ Selected {candidate} (available and working)")
+                        print(f"Selected {candidate} (available and working)")
                         return candidate
             
             # If all preferred models fail, try any available model
-            print("🔄 Trying alternative models...")
+            print("Trying alternative models...")
             for name in sorted(model_names.keys()):
                 if any(keyword in name for keyword in ['flash', 'pro']) and name not in self.PREFERRED_MODELS:
                     print(f"  Testing {name}...")
                     if self._test_model_availability(name):
-                        print(f"✅ Found working alternative: {name}")
+                        print(f"Found working alternative: {name}")
                         return name
         
         # Final fallback to most reliable models
-        print("⚠️  All preferred models unavailable. Trying final fallbacks...")
+        print("All preferred models unavailable. Trying final fallbacks...")
         fallback_models = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-pro']
         
         for fallback in fallback_models:
@@ -115,7 +115,7 @@ class GeminiClient:
                     return fallback
         
         # Last resort - return the most stable model even if untested
-        print("⚠️  Warning: Using untested fallback model (quota may be exceeded)")
+        print("Warning: Using untested fallback model (quota may be exceeded)")
         return 'gemini-1.5-flash'
     
     def _test_model_availability(self, model_name: str) -> bool:

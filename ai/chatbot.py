@@ -44,7 +44,14 @@ def suppress_stderr():
 with suppress_stderr():
     import google.generativeai as genai
 
-# Import IntentClassifier directly from ai.intent_classifier
+# Import Enhanced IntentClassifier 
+try:
+    from ai.enhanced_intent_classifier import EnhancedIntentClassifier
+    ENHANCED_INTENT_AVAILABLE = True
+except ImportError:
+    ENHANCED_INTENT_AVAILABLE = False
+
+# Import original IntentClassifier as fallback
 try:
     from ai.intent_classifier import IntentClassifier
 except ImportError:
@@ -90,7 +97,16 @@ class ChatBot:
         self.gemini_client = gemini_client
         self.conversation_history = []
         self.max_history_length = 20  # Keep last 20 exchanges
-        self.intent_classifier = IntentClassifier() if IntentClassifier else None
+        # Initialize enhanced intent classifier
+        if ENHANCED_INTENT_AVAILABLE:
+            self.intent_classifier = EnhancedIntentClassifier()
+            print("Enhanced intent classifier initialized")
+        elif IntentClassifier:
+            self.intent_classifier = IntentClassifier()
+            print("Using fallback intent classifier")
+        else:
+            self.intent_classifier = None
+            print("No intent classifier available")
         self._pending_search_query = None  # Store pending browser searches
         
         # Initialize data retrieval capabilities
@@ -549,8 +565,53 @@ class ChatBot:
         
         return user_message
 
+    def _needs_web_search(self, query: str) -> bool:
+        """Determine if a query needs web search using enhanced intent classification."""
+        # Use enhanced intent classifier if available
+        if ENHANCED_INTENT_AVAILABLE and isinstance(self.intent_classifier, EnhancedIntentClassifier):
+            try:
+                result = self.intent_classifier.classify_intent(query)
+                return result.get('needs_web_search', False)
+            except Exception as e:
+                print(f"Intent classification failed: {e}")
+        
+        # Fallback to keyword-based detection
+        query_lower = query.lower()
+        
+        # Web search indicators
+        web_indicators = [
+            # News and current events
+            'trending', 'latest news', 'breaking news', 'current news', 'today news',
+            'recent news', 'news today', 'what happened', 'latest update',
+            
+            # Time-sensitive queries
+            'today', 'yesterday', 'this week', 'this month', 'this year', 'recent',
+            'latest', 'current', 'now', 'right now', 'currently',
+            
+            # Sports and live events
+            'score', 'match result', 'tournament', 'championship', 'final',
+            'man of the match', 'player of the series', 'winner', 'live score',
+            'cricket', 'football', 'tennis', 'basketball', 'sports',
+            
+            # Financial data
+            'stock price', 'market', 'bitcoin', 'cryptocurrency', 'exchange rate',
+            
+            # Entertainment
+            'trending song', 'viral video', 'youtube trending', 'box office',
+            'movie release', 'new album', 'celebrity news',
+            
+            # Weather (though we have local weather, web might be more current)
+            'weather forecast', 'temperature today', 'weather tomorrow',
+            
+            # General web search phrases
+            'search for', 'find information about', 'tell me about', 'what is happening',
+            'any updates on', 'latest information'
+        ]
+        
+        return any(indicator in query_lower for indicator in web_indicators)
+
     def _handle_data_retrieval(self, user_message: str) -> str:
-        """Handle ANY question using integrated Local + Web retrieval system."""
+        """Handle ANY question using integrated Local + Web retrieval system with smart prioritization."""
         if not self.data_retrieval_available:
             return ""
             
@@ -558,21 +619,11 @@ class ChatBot:
             local_result = None
             web_result = None
             
-            # Step 1: Try local data retrieval first (system, commands, conversational)
-            if self.local_data_available and self.universal_assistant:
-                local_result = self.universal_assistant.answer_anything(user_message)
-                
-                # Check if local retrieval was successful and sufficient
-                if local_result.get('success'):
-                    query_type = local_result.get('query_type', 'unknown')
-                    
-                    # For system, command, and conversational queries, use local result
-                    if query_type in ['system', 'command', 'conversational']:
-                        local_result['source'] = 'local'
-                        return self._format_unified_context(local_result, user_message)
+            # Check if this query needs web search first
+            needs_web = self._needs_web_search(user_message)
             
-            # Step 2: Try web retrieval for live data, factual queries, or when local fails
-            if self.web_data_available and self.web_retrieval:
+            # Step 1: If query needs web search, try web first
+            if needs_web and self.web_data_available and self.web_retrieval:
                 try:
                     web_result = self.web_retrieval.get_answer_from_web(user_message)
                     
@@ -582,14 +633,40 @@ class ChatBot:
                         return self._format_unified_context(web_result, user_message)
                         
                 except Exception as e:
-                    print(f"⚠️ Web retrieval failed: {e}")
+                    print(f"Web retrieval failed: {e}")
             
-            # Step 3: Fallback to local result if web failed
+            # Step 2: Try local data retrieval (system, commands, conversational)
+            if self.local_data_available and self.universal_assistant:
+                local_result = self.universal_assistant.answer_anything(user_message)
+                
+                # Check if local retrieval was successful
+                if local_result.get('success'):
+                    query_type = local_result.get('query_type', 'unknown')
+                    
+                    # For system, command, and conversational queries, use local result
+                    if query_type in ['system', 'command', 'conversational']:
+                        local_result['source'] = 'local'
+                        return self._format_unified_context(local_result, user_message)
+            
+            # Step 3: Fallback web search (if not tried yet and available)
+            if not needs_web and self.web_data_available and self.web_retrieval:
+                try:
+                    web_result = self.web_retrieval.get_answer_from_web(user_message)
+                    
+                    if web_result.get('success'):
+                        web_result['source'] = 'web'
+                        web_result['query_type'] = 'web_search'
+                        return self._format_unified_context(web_result, user_message)
+                        
+                except Exception as e:
+                    print(f"Web retrieval failed: {e}")
+            
+            # Step 4: Fallback to local result if web failed
             if local_result and local_result.get('success'):
                 local_result['source'] = 'local_fallback'
                 return self._format_unified_context(local_result, user_message)
             
-            # Step 4: Ultimate fallback
+            # Step 5: Ultimate fallback
             return f"[Could not retrieve information for: '{user_message}'. Both local and web retrieval unavailable or failed.]"
                 
         except Exception as e:
