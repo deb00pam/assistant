@@ -9,14 +9,25 @@ to improve intent classification accuracy.
 import os
 from typing import List, Tuple, Dict
 
+# Load environment variables
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv is optional
+
 def get_default_postgresql_config() -> Dict[str, str]:
     """Get default PostgreSQL configuration from environment variables."""
+    password = os.getenv('POSTGRES_PASSWORD')
+    if not password:
+        raise ValueError("POSTGRES_PASSWORD must be set in .env file")
+    
     return {
         'host': os.getenv('POSTGRES_HOST', 'localhost'),
         'port': os.getenv('POSTGRES_PORT', '5432'),
         'database': os.getenv('POSTGRES_DB', 'truvo_intent'),
         'user': os.getenv('POSTGRES_USER', 'truvo'),
-        'password': os.getenv('POSTGRES_PASSWORD', 'password')
+        'password': password
     }
 
 # PostgreSQL imports
