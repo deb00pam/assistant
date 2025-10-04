@@ -434,6 +434,7 @@ def interactive_mode():
                         # Create Gemini local data retriever (share the same model as assistant)
                         local_retriever = GeminiLocalDataRetriever(gemini_client=assistant.gemini_client)
                         response = local_retriever.retrieve_local_data(user_input)
+                        print(f"Local Data Result: {response}")
                     else:
                         print("Gemini local data retrieval not available. Check dependencies.")
                 except Exception as e:
@@ -447,7 +448,9 @@ def interactive_mode():
                 try:
                     from llm.gemini.web_retrieval import web_search
                     response = web_search(user_input, gemini_client=assistant.gemini_client)
+                    print(f"Web Search Result: {response}")
                 except Exception as e:
+                    print(f"Web search failed: {e}")
                     # Fallback to conversation
                     response = chatbot.chat(user_input)
                     print(f"Truvo: {response}")

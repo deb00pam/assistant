@@ -273,32 +273,8 @@ class ChatBot:
                     })
                     self._trim_history()
                     self.save_user_state()
-                    # Always reply in BenGlish (English script Bengali) if user input is BenGlish or Bengali
-                    if detected_lang in ['bn', 'benglish'] or is_benglish(user_message):
-                        print(f"[DEBUG] Forcing BenGlish output (English script Bengali) regardless of detected_lang")
-                        try:
-                            from indic_transliteration.sanscript import transliterate
-                            from indic_transliteration.sanscript import BENGALI, ITRANS
-                            bengali_text = translate_text(bot_response, target='bn', source='en', api_key=api_key)
-                            benglish = transliterate(bengali_text, BENGALI, ITRANS)
-                            print(f"[DEBUG] BenGlish transliteration: {benglish}")
-                            return benglish
-                        except Exception as ex:
-                            print(f"[DEBUG] BenGlish transliteration failed: {ex}")
-                            return bot_response
-                    elif detected_lang in ['hi', 'hinglish'] or is_hinglish(user_message):
-                        print(f"[DEBUG] Always replying in Hinglish style (English script Hindi)")
-                        try:
-                            from indic_transliteration.sanscript import transliterate
-                            from indic_transliteration.sanscript import DEVANAGARI, ITRANS
-                            hindi_text = translate_text(bot_response, target='hi', source='en', api_key=api_key)
-                            hinglish = transliterate(hindi_text, DEVANAGARI, ITRANS)
-                            print(f"[DEBUG] Hinglish transliteration: {hinglish}")
-                            return hinglish
-                        except Exception as ex:
-                            print(f"[DEBUG] Hinglish transliteration failed: {ex}")
-                            return bot_response
-                    elif detected_lang and detected_lang != 'en':
+                    # Let Gemini handle all language detection and translation intelligently
+                    if detected_lang and detected_lang != 'en':
                         print(f"[DEBUG] Translating Gemini reply to: {detected_lang}")
                         try:
                             translated = translate_text(bot_response, target=detected_lang, source='en', api_key=api_key)
