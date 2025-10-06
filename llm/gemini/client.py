@@ -171,16 +171,23 @@ class GeminiClient:
             # Get OS-specific context and commands
             os_context = ""
             os_commands = {}
+            system_blueprint = {}
             if OS_DETECTION_AVAILABLE and get_os_context and get_os_commands and os_detector:
                 try:
                     os_context = f"\nSYSTEM ENVIRONMENT: {get_os_context()}\n"
                     os_commands = get_os_commands()
-                    
+                    system_blueprint = os_detector.system_blueprint
+
+                    # Add comprehensive system information
+                    os_context += f"SYSTEM BLUEPRINT: {json.dumps(system_blueprint, indent=2)}\n"
+
                     # Add OS-specific instructions
                     if os_detector.os_info['is_windows']:
                         os_context += "- Use Windows UI elements: Start menu, taskbar, Windows applications\n"
                         os_context += "- File paths use backslashes (\\) \n"
                         os_context += "- Key combinations like Ctrl+L must be written as 'ctrl+l'\n"
+                        os_context += "- System apps (notepad, calc, cmd) launch via Win+R (Run dialog)\n"
+                        os_context += "- Common apps launch via Win key (Start menu)\n"
                     elif os_detector.os_info['is_macos']:
                         os_context += "- Use macOS UI elements: Dock, Launchpad, Applications folder\n"
                         os_context += "- File paths use forward slashes (/)\n"
@@ -190,16 +197,28 @@ class GeminiClient:
                         os_context += "- File paths use forward slashes (/)\n"
                         os_context += "- Key combinations typically use Ctrl\n"
                 except Exception as e:
-                    os_context = ""
+                    os_context = f"OS detection error: {e}\n"
             
             prompt = f"""
 You are a desktop assistant AI that can see and understand computer screens.
 
+🚨 CRITICAL MISSION: You MUST complete this task by ANY MEANS NECESSARY. The user is completely dependent on you to accomplish this task. FAILURE IS NOT AN OPTION.
+
 TASK: {task_description}
-{os_context}
+{os_context}TruvoTest
+
+
+MANDATORY REQUIREMENTS - YOU MUST FOLLOW THESE:
+- This task is CRITICAL and must be completed successfully
+- The user cannot do this themselves - you are their only means of completion
+- If the first approach fails, try alternative methods immediately
+- Keep trying different strategies until the task is done
+- NEVER give up or say "I can't do this"
+- Be creative and adaptive in your approach
+
 CRITICAL INSTRUCTIONS:
 - NEVER type terminal/command line commands
-- NEVER use "edge website.com" command syntax  
+- NEVER use "edge website.com" command syntax
 - Use appropriate UI elements for this operating system
 - Key combinations must be written in lowercase with + (e.g., "ctrl+l")
 
@@ -208,22 +227,27 @@ TASK CLASSIFICATION:
 - Website tasks (go to website.com, visit site.org, chatgpt.com) → Open browser first, then navigate
 - Browser tasks (open chrome, open edge, open firefox) → Open browser app only
 
-For SYSTEM/APP tasks like "settings", "updates", "calculator", "notepad":
-1. Press "win" key (opens Start menu)  
-2. Type the app name (e.g., "settings", "calculator", "notepad")
-3. Press "enter" (launches the Windows app)
+For SYSTEM/APP tasks like "notepad", "calc", "cmd", "regedit", "control":
+1. Press "win+r" (opens Run dialog - NOT Start menu)
+2. Type the app name (e.g., "notepad", "calc", "cmd")
+3. Press "enter" (launches the system app)
+
+For COMMON APPLICATIONS like "chrome", "word", "excel", "firefox":
+1. Press "win" key (opens Start menu)
+2. Type the app name (e.g., "chrome", "word")
+3. Press "enter" (launches the application)
 
 For WEBSITE tasks containing URLs (.com, .org) or "go to" phrases:
 1. Press "win" key (opens Start menu)
-2. Type browser name (e.g., "edge", "chrome") 
+2. Type browser name (e.g., "edge", "chrome")
 3. Press "enter" (launches browser)
 4. Press "ctrl+l" (focuses address bar)
 5. Type website URL only
-6. Press "enter" (navigates to site)
+6. Press "enter" (navigates to site)⚠️ REMEMBER: The user is counting on you. If something doesn't work, try a different approach. Keep going until the task is complete.
 
 Please respond in this JSON format:
 {{
-    "understanding": "What I see on screen",
+    "understanding": "What I see on screen and my plan to complete the task",
     "actions": [
         {{
             "action_type": "key_press",
@@ -232,15 +256,27 @@ Please respond in this JSON format:
             "confidence": 0.9
         }},
         {{
-            "action_type": "type", 
+            "action_type": "type",
             "text": "settings",
             "description": "Type 'settings' to search for Settings app",
             "confidence": 0.9
         }},
         {{
             "action_type": "key_press",
-            "key": "enter", 
+            "key": "enter",
             "description": "Press Enter to open Settings",
+            "confidence": 0.9
+        }},
+        {{
+            "action_type": "click",
+            "coordinates": [500, 300],
+            "description": "Click on the Settings icon at coordinates (500, 300)",
+            "confidence": 0.8
+        }},
+        {{
+            "action_type": "type",
+            "text": "Hello World",
+            "description": "Type 'Hello World' into the text field",
             "confidence": 0.9
         }}
     ],
@@ -263,56 +299,6 @@ Please respond in this JSON format:
                 return self._rule_based_plan(task_description)
             return {"error": err_text, "actions": [], "confidence": 0.0}
 
-    def _rule_based_plan(self, task: str) -> Dict[str, Any]:
-        """Heuristic local planner used when API unavailable (rate limits etc.)."""
-        t = task.lower()
-        actions: List[Dict[str, Any]] = []
-        understanding = "Heuristic fallback plan generated (no model)."
-        confidence = 0.4
-        # Basic primitives
-        def start_and_type(app: str):
-            return [
-                {"action_type": "key_press", "key": "win", "description": "Open start menu (fallback)"},
-                {"action_type": "type", "text": app, "description": f"Type '{app}' in start menu (fallback)"},
-                {"action_type": "key_press", "key": "enter", "description": f"Launch {app} (fallback)"},
-            ]
-        if any(k in t for k in ["youtube", "song", "video", "play"]):
-            # Extract a probable query after 'search' or 'for'
-            import re
-            query = ""
-            m = re.search(r'search(?: for)? (.*)', t)
-            if m:
-                query = m.group(1)
-            query = query.replace('play', '').replace('youtube', '').strip()
-            actions.extend(start_and_type('edge'))
-            actions.append({"action_type": "key_press", "key": "ctrl+l", "description": "Focus address bar (fallback)"})
-            actions.append({"action_type": "type", "text": "https://www.youtube.com", "description": "Type YouTube URL (fallback)"})
-            actions.append({"action_type": "key_press", "key": "enter", "description": "Navigate to YouTube (fallback)"})
-            if query:
-                actions.append({"action_type": "click", "description": "Click YouTube search bar (fallback)"})
-                actions.append({"action_type": "type", "text": query, "description": f"Type search query '{query}' (fallback)"})
-                actions.append({"action_type": "key_press", "key": "enter", "description": "Submit search (fallback)"})
-        elif any(k in t for k in ["update", "windows update", "check for updates"]):
-            actions.extend(start_and_type('settings'))
-            actions.append({"action_type": "type", "text": "windows update", "description": "Type 'windows update' inside Settings (fallback)"})
-            actions.append({"action_type": "key_press", "key": "enter", "description": "Open Windows Update section (fallback)"})
-        elif any(k in t for k in ["notepad", "note pad"]):
-            actions.extend(start_and_type('notepad'))
-        elif any(k in t for k in ["calc", "calculator"]):
-            actions.extend(start_and_type('calculator'))
-        else:
-            # Generic attempt: open start and type something meaningful
-            words = t.split()
-            if words:
-                actions.extend(start_and_type(words[0]))
-        return {
-            "understanding": understanding,
-            "actions": actions,
-            "safety_concerns": [],
-            "next_steps": "Executed heuristic plan; consider re-running when quota resets",
-            "overall_confidence": confidence,
-            "fallback_used": True
-        }
     
     def _parse_response(self, response_text: str) -> Dict[str, Any]:
         """Parse the AI response into structured data."""

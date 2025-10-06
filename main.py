@@ -904,6 +904,58 @@ def single_task_mode(task: str):
         sys.exit(1)
 
 
+def multiple_tasks_mode(tasks: List[str]):
+    """Execute multiple tasks sequentially."""
+    print(f"Executing {len(tasks)} tasks sequentially:")
+    for i, task in enumerate(tasks, 1):
+        print(f"\n--- Task {i}/{len(tasks)}: {task} ---")
+    
+    model = os.getenv('ASSISTANT_MODEL', 'auto')
+    config = AssistantConfig(
+        safe_mode=False,
+        confirmation_required=False,
+        screenshot_dir=os.getenv('SCREENSHOT_DIR', 'screenshots'),
+        model_name=model
+    )
+    
+    try:
+        assistant = DesktopAssistant(config)
+        total_completed = 0
+        total_actions = 0
+        
+        for i, task in enumerate(tasks, 1):
+            print(f"\nExecuting task {i}/{len(tasks)}: {task}")
+            result = assistant.execute_task(task)
+            
+            if result["success"]:
+                print(f"✓ Task {i} completed successfully!")
+                print(f"  Actions: {result['actions_completed']}/{result['total_actions']}")
+                total_completed += 1
+                total_actions += result['total_actions']
+            else:
+                print(f"✗ Task {i} failed: {result.get('error', 'Unknown error')}")
+                if result['actions_completed'] > 0:
+                    print(f"  Partial completion: {result['actions_completed']}/{result['total_actions']}")
+                    total_actions += result['total_actions']
+                # Continue with next task even if one fails
+        
+        print(f"\n{'='*60}")
+        print(f"Multiple tasks execution complete!")
+        print(f"Tasks completed: {total_completed}/{len(tasks)}")
+        print(f"Total actions executed: {total_actions}")
+        print(f"{'='*60}")
+        
+        if total_completed == len(tasks):
+            print("All tasks completed successfully!")
+        else:
+            print(f"{len(tasks) - total_completed} task(s) failed or had issues.")
+            sys.exit(1)
+            
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -913,6 +965,7 @@ def main():
 Examples:
   python main.py                              # Interactive mode
   python main.py -t "open calculator"        # Single task mode
+  python main.py --tasks "open notepad;type hello;save file as test.txt"  # Multiple tasks
   python main.py --analyze                   # Analyze screen only
         """
     )
@@ -920,6 +973,11 @@ Examples:
     parser.add_argument(
         '--task', '-t',
         help='Execute a single task and exit'
+    )
+    
+    parser.add_argument(
+        '--tasks',
+        help='Execute multiple tasks sequentially (semicolon-separated)'
     )
     
     parser.add_argument(
@@ -986,6 +1044,13 @@ Examples:
             analyze_screen(assistant)
         elif args.task:
             single_task_mode(args.task)
+        elif args.tasks:
+            # Parse multiple tasks separated by semicolons
+            tasks = [task.strip() for task in args.tasks.split(';') if task.strip()]
+            if not tasks:
+                print("Error: No valid tasks provided")
+                sys.exit(1)
+            multiple_tasks_mode(tasks)
         else:
             interactive_mode()
     except KeyboardInterrupt:

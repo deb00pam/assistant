@@ -104,22 +104,79 @@ class DesktopAssistant:
         logging.info("Truvo Desktop Assistant initialized")
     
     def execute_task(self, task_description: str) -> Dict[str, Any]:
-        """Execute a high-level task with multi-step capability."""
+        """Execute a task by analyzing screenshot and performing actions."""
         logging.info(f"Starting task: {task_description}")
-        
+
         self.current_task = task_description
         self.task_progress = []
         self.is_running = True
-        
-        # Let Gemini AI determine if task requires multiple steps
-        is_multi_step = len(task_description.split()) > 5  # Simple heuristic
-        
-        if is_multi_step:
-            logging.info("Detected multi-step task - will use iterative approach")
-            return self._execute_multi_step_task(task_description)
-        else:
-            logging.info("Single-step task - using standard approach")
-            return self._execute_single_step_task(task_description)
+
+        try:
+            # Capture screenshot and get both image and path
+            screenshot_image, screenshot_path = self.screen_analyzer.capture_screenshot(save=True)
+
+            # Get AI analysis
+            analysis = self.gemini_client.analyze_screenshot(screenshot_image, task_description)
+
+            if "error" in analysis:
+                return {
+                    "success": False,
+                    "error": analysis["error"],
+                    "actions_completed": 0
+                }
+
+            # Execute actions
+            actions = analysis.get("actions", [])
+            logging.info(f"AI generated {len(actions)} actions: {[a.get('description', 'No desc') for a in actions]}")
+
+            results = []
+            for i, action in enumerate(actions):
+                if not self.is_running or i >= self.config.max_actions_per_task:
+                    break
+
+                logging.info(f"Executing action {i+1}/{len(actions)}: {action.get('description', 'No description')}")
+
+                # Use the verification system
+                result = self._execute_single_action(action, task_description)
+                results.append(result)
+                self.task_progress.append(result)
+
+                # Log verification results
+                if result["verified"]:
+                    logging.info(f"✓ Action verified: {result.get('verification_reason', 'Success')}")
+                else:
+                    logging.warning(f"⚠ Action verification failed: {result.get('verification_reason', 'Unknown issue')}")
+                    # Log detailed failure analysis if available
+                    failure_analysis = result.get("failure_analysis")
+                    if failure_analysis and failure_analysis.get("analyzed"):
+                        logging.error(f"🔍 Failure Analysis: {failure_analysis.get('failure_reason', 'Unknown')}")
+                        logging.info(f"💡 Suggested Fix: {failure_analysis.get('suggested_fix', 'None')}")
+                        logging.info(f"🔄 Alternative: {failure_analysis.get('alternative_approach', 'None')}")
+                
+                if not result["success"]:
+                    logging.error(f"Action execution failed: {result.get('error', 'Unknown error')}")
+                    break
+                
+                time.sleep(0.5)
+
+            return {
+                "success": len([r for r in results if r["success"]]) == len(results),
+                "task_description": task_description,
+                "initial_analysis": analysis,
+                "actions_completed": len([r for r in results if r["success"]]),
+                "total_actions": len(actions),
+                "action_results": results
+            }
+
+        except Exception as e:
+            logging.error(f"Error executing task: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "actions_completed": len(self.task_progress)
+            }
+        finally:
+            self.is_running = False
     
     def _execute_multi_step_task(self, task_description: str) -> Dict[str, Any]:
         """Execute a complex task that may require multiple screenshots and analysis cycles."""
@@ -228,12 +285,12 @@ class DesktopAssistant:
     def _execute_single_step_task(self, task_description: str) -> Dict[str, Any]:
         """Execute a simple single-step task (original behavior)."""
         try:
-            # Capture screenshot
-            screenshot = self.screen_analyzer.capture_screenshot()
-            
+            # Capture screenshot and get both image and path
+            screenshot_image = self.screen_analyzer.capture_screenshot(save=True)
+            screenshot_path = self.screen_analyzer.capture_screenshot(save=False)  # This returns the PIL image
+
             # Get AI analysis
-            analysis = self.gemini_client.analyze_screenshot(screenshot, task_description)
-            
+            analysis = self.gemini_client.analyze_screenshot(screenshot_image, task_description)
             if "error" in analysis:
                 return {
                     "success": False,
@@ -293,37 +350,51 @@ class DesktopAssistant:
             results.append(result)
             self.task_progress.append(result)
             
+            # Log verification results
+            if result["verified"]:
+                logging.info(f"✓ Action verified: {result.get('verification_reason', 'Success')}")
+            else:
+                logging.warning(f"⚠ Action verification failed: {result.get('verification_reason', 'Unknown issue')}")
+            
             if not result["success"]:
-                logging.error(f"Action failed: {result.get('error', 'Unknown error')}")
+                logging.error(f"Action execution failed: {result.get('error', 'Unknown error')}")
                 break
             
             time.sleep(0.5)
         
         return results
     
-    def _execute_single_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a single action."""
+    def _execute_single_action(self, action: Dict[str, Any], task_description: str = "") -> Dict[str, Any]:
+        """Execute a single action with verification."""
         start_time = time.time()
         action_type = action.get("action_type", "unknown")
         
         logging.info(f"Executing {action_type}: {action.get('description', 'No description')}")
         
         try:
-            success = self.gui_automator.execute_action(action)
+            # Use the verification system instead of direct execution
+            result = self.gui_automator.verify_action_execution(action, task_description)
+            
             return {
                 "action": action,
-                "success": success,
+                "success": result.get("success", False),
+                "verified": result.get("verified", False),
                 "execution_time": time.time() - start_time,
                 "timestamp": time.time(),
-                "error": None if success else "Action execution failed"
+                "error": result.get("error"),
+                "verification_reason": result.get("reason", "No verification performed"),
+                "failure_analysis": result.get("failure_analysis"),
+                "task_completed": result.get("task_completed", False)
             }
         except Exception as e:
             return {
                 "action": action,
                 "success": False,
+                "verified": False,
                 "execution_time": time.time() - start_time,
                 "timestamp": time.time(),
-                "error": str(e)
+                "error": str(e),
+                "verification_reason": "Exception during execution"
             }
     
     def _confirm_action(self, action: Dict[str, Any]) -> bool:
