@@ -115,7 +115,7 @@ except ImportError:
     VOICE_AVAILABLE = False
     print("Warning: Voice libraries not installed. Voice mode disabled. Install with: pip install SpeechRecognition pyttsx3 pyaudio")
 
-# Import VoiceHandler from speak.py
+# Import VoiceHandler from interfaces/voice.py
 try:
     from interfaces.voice import VoiceHandler
 except ImportError:
@@ -328,8 +328,10 @@ def interactive_mode():
         # Initialize Gemini Intent Classifier using the same model as assistant
         if GeminiIntentClassifier:
             gemini_intent_classifier = GeminiIntentClassifier(gemini_client=assistant.gemini_client)
+            intent_classifier = gemini_intent_classifier  # Global reference for voice functions
         else:
             gemini_intent_classifier = None
+            intent_classifier = None
             print("Gemini Intent Classifier not available, using fallback")
             
         pass  # Clean startup - no system messages
@@ -731,17 +733,15 @@ def start_interactive_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
                 if assistant.voice_handler and assistant.voice_handler.is_available:
                     try:
                         import subprocess
+                        import os
                         # Use complete response for voice - no truncation
                         voice_response = response.replace('\n', ' ').replace('  ', ' ').strip()
                         
                         # Use external TTS script with no timeout - let it complete fully
-                        cmd = [sys.executable, "speak.py", voice_response]
+                        cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "interfaces", "speak.py"), voice_response]
                         if SELECTED_VOICE_ID:
                             cmd.append(SELECTED_VOICE_ID)
-                        subprocess.run(cmd, 
-                                     cwd="c:\\Users\\deb0p\\truvo",
-                                     # No timeout - let it speak completely
-                                     capture_output=True)
+                        subprocess.run(cmd)
                     except Exception as e:
                         print(f"External TTS Error: {e}")
             else:

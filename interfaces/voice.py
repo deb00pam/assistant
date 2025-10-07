@@ -26,7 +26,7 @@ except ImportError:
     # Fallback: Create lightweight config if main.py not available
     @dataclass
     class AssistantConfig:
-        """Configuration for voice handler (lightweight version for speak.py)."""
+        """Configuration for voice handler (lightweight version for interfaces/speak.py)."""
         voice_enabled: bool = True
         voice_language: str = 'en-US'
         voice_timeout: float = 5.0
