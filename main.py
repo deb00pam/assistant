@@ -404,7 +404,7 @@ def interactive_mode():
                 except Exception:
                     intent = "conversation"  # Safe fallback
             
-            # Handle based on intent type
+            # Handle based on intent type - automation removed, all intents treated as conversation or data retrieval
             if intent == "conversation":
                 # Handle as conversation
                 response = chatbot.chat(user_input)
@@ -415,19 +415,14 @@ def interactive_mode():
                     assistant.voice_handler.speak(response)
                     
             elif intent == "automation":
-                # Handle as automation task
-                result = assistant.execute_task(user_input)
+                # Automation removed - treat as conversation
+                print("Automation functionality has been removed. Treating as conversation...")
+                response = chatbot.chat(f"I understand you want to: {user_input}. However, I can no longer perform desktop automation tasks. How can I help you with information or conversation instead?")
+                print(f"Truvo: {response}")
                 
-                # Show results
-                print("\n" + "="*60)
-                if result["success"]:
-                    print(f"SUCCESS - Task completed!")
-                    print(f"   Actions: {result['actions_completed']}/{result['total_actions']}")
-                else:
-                    print(f"FAILED - {result['error']}")
-                    if result['actions_completed'] > 0:
-                        print(f"   Partial completion: {result['actions_completed']}/{result['total_actions']}")
-                print("="*60)
+                # Voice response if voice is enabled (silent)
+                if assistant.voice_handler and assistant.voice_handler.is_available:
+                    assistant.voice_handler.speak(response)
                 
             elif intent == "local_data_retrieval":
                 # Handle local data search using Gemini AI
@@ -479,12 +474,17 @@ def show_help():
 ║                         HELP                             ║
 ╠══════════════════════════════════════════════════════════╣
 ║                                                          ║
-║ TASK EXAMPLES:                                           ║
-║   • "Take a screenshot"                                  ║
-║   • "Open notepad and type hello world"                 ║
-║   • "Click on the Chrome icon"                          ║
-║   • "Press the Windows key"                             ║
-║   • "Scroll down 3 times"                               ║
+║ CONVERSATION:                                            ║
+║   • Ask me anything! I can chat about any topic         ║
+║   • "What's the weather like?"                          ║
+║   • "Tell me a joke"                                    ║
+║   • "How do neural networks work?"                      ║
+║   • "What do you think about..."                        ║
+║                                                          ║
+║ DATA RETRIEVAL:                                          ║
+║   • Ask questions about local files or web search      ║
+║   • "Find information about Python programming"         ║
+║   • "Search for news about AI"                          ║
 ║                                                          ║
 ║ CONTROL COMMANDS:                                        ║
 ║   • help         - Show this help                       ║
@@ -528,21 +528,19 @@ def show_help():
 
 def show_status(assistant: DesktopAssistant):
     """Show assistant status."""
-    status = assistant.get_task_status()
     config = assistant.config
     
     print(f"""
 ╔══════════════════════════════════════════════════════════╗
 ║                      TRUVO STATUS                        ║
 ╠══════════════════════════════════════════════════════════╣
-║ Current Task: {(status['current_task'] or 'None'):<40} ║
-║ Running: {('Yes' if status['is_running'] else 'No'):<47} ║
-║ Actions Completed: {status['actions_completed']:<35} ║
+║ Assistant Type: Conversational AI Assistant            ║
+║ Automation: Disabled (Removed)                         ║
 ║                                                          ║
 ║ Safe Mode: {('ON' if config.safe_mode else 'OFF'):<46} ║
 ║ Confirmation: {('ON' if config.confirmation_required else 'OFF'):<43} ║
-║ Max Actions: {config.max_actions_per_task:<44} ║
 ║ Screenshot Dir: {config.screenshot_dir:<39} ║
+║ Voice Handler: {('Available' if assistant.voice_handler else 'Not Available'):<37} ║
 ╚══════════════════════════════════════════════════════════╝
 """)
 
@@ -745,19 +743,24 @@ def start_interactive_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
                     except Exception as e:
                         print(f"External TTS Error: {e}")
             else:
-                print("Executing task...")
-                assistant.voice_handler.speak("I'll execute that task for you.")
+                print("Automation functionality has been removed. Treating as conversation...")
+                assistant.voice_handler.speak("I understand your request, but automation functionality has been removed. Let me help you with conversation instead.")
                 
-                result = assistant.execute_task(text)
+                response = chatbot.chat(f"I understand you want to: {text}. However, I can no longer perform desktop automation tasks. How can I help you with information or conversation instead?")
+                print(f"Truvo: {response}")
                 
-                if result["success"]:
-                    success_msg = f"Done! {result['actions_completed']} actions completed."
-                    print(f"{success_msg}")
-                    assistant.voice_handler.speak(success_msg)
-                else:
-                    error_msg = f"Sorry, that didn't work: {result.get('error', 'Unknown error')}"
-                    print(f"Error: {error_msg}")
-                    assistant.voice_handler.speak(error_msg)
+                # Voice response for the conversation
+                if assistant.voice_handler and assistant.voice_handler.is_available:
+                    try:
+                        import subprocess
+                        import os
+                        voice_response = response.replace('\n', ' ').replace('  ', ' ').strip()
+                        cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "interfaces", "speak.py"), voice_response]
+                        if SELECTED_VOICE_ID:
+                            cmd.append(SELECTED_VOICE_ID)
+                        subprocess.run(cmd)
+                    except Exception as e:
+                        print(f"External TTS Error: {e}")
             
             # Clean interface - no separators
             
@@ -795,20 +798,13 @@ def handle_voice_input(assistant: DesktopAssistant, chatbot: ChatBot):
             print(f"Truvo: {response}")
             assistant.voice_handler.speak(response)
         else:
-            # Handle as automation task
-            print(f"\nExecuting automation task...")
-            assistant.voice_handler.speak("Executing your request.")
+            # Automation removed - treat as conversation
+            print(f"\nAutomation functionality has been removed. Treating as conversation...")
+            assistant.voice_handler.speak("I understand your request, but automation functionality has been removed.")
             
-            result = assistant.execute_task(text)
-            
-            if result["success"]:
-                success_msg = f"Task completed successfully. {result['actions_completed']} actions performed."
-                print(f"{success_msg}")
-                assistant.voice_handler.speak(success_msg)
-            else:
-                error_msg = f"Task failed: {result.get('error', 'Unknown error')}"
-                print(f"Error: {error_msg}")
-                assistant.voice_handler.speak(error_msg)
+            response = chatbot.chat(f"I understand you want to: {text}. However, I can no longer perform desktop automation tasks. How can I help you with information or conversation instead?")
+            print(f"Truvo: {response}")
+            assistant.voice_handler.speak(response)
     else:
         print("No voice input detected")
     
@@ -904,80 +900,16 @@ def single_task_mode(task: str):
         sys.exit(1)
 
 
-def multiple_tasks_mode(tasks: List[str]):
-    """Execute multiple tasks sequentially."""
-    print(f"Executing {len(tasks)} tasks sequentially:")
-    for i, task in enumerate(tasks, 1):
-        print(f"\n--- Task {i}/{len(tasks)}: {task} ---")
-    
-    model = os.getenv('ASSISTANT_MODEL', 'auto')
-    config = AssistantConfig(
-        safe_mode=False,
-        confirmation_required=False,
-        screenshot_dir=os.getenv('SCREENSHOT_DIR', 'screenshots'),
-        model_name=model
-    )
-    
-    try:
-        assistant = DesktopAssistant(config)
-        total_completed = 0
-        total_actions = 0
-        
-        for i, task in enumerate(tasks, 1):
-            print(f"\nExecuting task {i}/{len(tasks)}: {task}")
-            result = assistant.execute_task(task)
-            
-            if result["success"]:
-                print(f"✓ Task {i} completed successfully!")
-                print(f"  Actions: {result['actions_completed']}/{result['total_actions']}")
-                total_completed += 1
-                total_actions += result['total_actions']
-            else:
-                print(f"✗ Task {i} failed: {result.get('error', 'Unknown error')}")
-                if result['actions_completed'] > 0:
-                    print(f"  Partial completion: {result['actions_completed']}/{result['total_actions']}")
-                    total_actions += result['total_actions']
-                # Continue with next task even if one fails
-        
-        print(f"\n{'='*60}")
-        print(f"Multiple tasks execution complete!")
-        print(f"Tasks completed: {total_completed}/{len(tasks)}")
-        print(f"Total actions executed: {total_actions}")
-        print(f"{'='*60}")
-        
-        if total_completed == len(tasks):
-            print("All tasks completed successfully!")
-        else:
-            print(f"{len(tasks) - total_completed} task(s) failed or had issues.")
-            sys.exit(1)
-            
-    except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Truvo - AI-powered desktop automation assistant",
+        description="Truvo - AI-powered conversational assistant",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                              # Interactive mode
-  python main.py -t "open calculator"        # Single task mode
-  python main.py --tasks "open notepad;type hello;save file as test.txt"  # Multiple tasks
+  python main.py                              # Interactive chat mode
   python main.py --analyze                   # Analyze screen only
         """
-    )
-    
-    parser.add_argument(
-        '--task', '-t',
-        help='Execute a single task and exit'
-    )
-    
-    parser.add_argument(
-        '--tasks',
-        help='Execute multiple tasks sequentially (semicolon-separated)'
     )
     
     parser.add_argument(
@@ -1033,7 +965,7 @@ Examples:
             print(f"Failed to list models: {e}")
         return
 
-    # Persist chosen model to env for single_task_mode helper
+    # Persist chosen model to env
     os.environ['ASSISTANT_MODEL'] = args.model
     
     # Run appropriate mode
@@ -1042,15 +974,6 @@ Examples:
             config = AssistantConfig(model_name=args.model)
             assistant = DesktopAssistant(config)
             analyze_screen(assistant)
-        elif args.task:
-            single_task_mode(args.task)
-        elif args.tasks:
-            # Parse multiple tasks separated by semicolons
-            tasks = [task.strip() for task in args.tasks.split(';') if task.strip()]
-            if not tasks:
-                print("Error: No valid tasks provided")
-                sys.exit(1)
-            multiple_tasks_mode(tasks)
         else:
             interactive_mode()
     except KeyboardInterrupt:
