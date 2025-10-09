@@ -16,13 +16,11 @@ import pickle
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, asdict
-from pathlib import Path
 
 # File paths
 USER_DATA_FILE = "user_data.json"
 CONTEXT_DB = "context_memory.db"
 PATTERNS_FILE = "gui_patterns.pkl"
-CONVERSATIONS_DIR = "conversations"
 
 @dataclass
 class ConversationTurn:
@@ -59,8 +57,6 @@ class ContextMemoryManager:
     
     def __init__(self, max_context_turns: int = 50):
         self.max_context_turns = max_context_turns
-        self.conversations_dir = Path(CONVERSATIONS_DIR)
-        self.conversations_dir.mkdir(exist_ok=True)
         self.init_database()
     
     def init_database(self):
