@@ -33,10 +33,10 @@ from io import BytesIO
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 from dataclasses import dataclass
-from automation.storage import load_user_data, save_user_data
+# from automation.storage import load_user_data, save_user_data - REMOVED: using context_memory.db instead
 
-# Load user data at startup
-USER_DATA = load_user_data()
+# Load user data at startup - REMOVED: using context_memory.db instead
+# USER_DATA = load_user_data()
 
 # Import translation utilities - now powered by Gemini AI!
 try:
@@ -366,6 +366,49 @@ def interactive_mode():
                 chatbot.clear_history()
                 print("Conversation history cleared!")
                 continue
+            elif user_input.lower().startswith('context search'):
+                query = user_input[14:].strip()  # Remove "context search "
+                if query:
+                    print(f"Searching context for: '{query}'")
+                    if hasattr(chatbot, 'context_retriever') and chatbot.context_retriever:
+                        result = chatbot.context_retriever.retrieve_context(query)
+                        print(f"\nContext Search Results:")
+                        print(f"Summary: {result.summary}")
+                        print(f"Confidence: {result.confidence_score:.2f}")
+                        if result.key_insights:
+                            print(f"Key Insights:")
+                            for insight in result.key_insights:
+                                print(f"  • {insight}")
+                        if result.relevant_conversations:
+                            print(f"\nRelevant Conversations ({len(result.relevant_conversations)} found):")
+                            for i, conv in enumerate(result.relevant_conversations[:3], 1):
+                                print(f"{i}. User: {conv.user_message[:100]}...")
+                                print(f"   Assistant: {conv.assistant_response[:100]}...")
+                        else:
+                            print("No relevant conversations found.")
+                    else:
+                        print("Gemini context retrieval not available.")
+                else:
+                    print("Usage: context search [your query]")
+                continue
+            elif user_input.lower() in ['conversation insights', 'insights']:
+                print("Analyzing conversation patterns...")
+                if hasattr(chatbot, 'context_retriever') and chatbot.context_retriever:
+                    insights = chatbot.context_retriever.get_conversation_insights()
+                    if 'error' in insights:
+                        print(f"Error: {insights['error']}")
+                    else:
+                        print(f"\nConversation Insights:")
+                        for key, value in insights.items():
+                            if isinstance(value, list):
+                                print(f"{key.replace('_', ' ').title()}:")
+                                for item in value:
+                                    print(f"  • {item}")
+                            else:
+                                print(f"{key.replace('_', ' ').title()}: {value}")
+                else:
+                    print("Gemini context analysis not available.")
+                continue
             elif user_input.lower().startswith('config'):
                 handle_config_command(assistant, user_input)
                 continue
@@ -485,6 +528,11 @@ def show_help():
 ║   • Ask questions about local files or web search      ║
 ║   • "Find information about Python programming"         ║
 ║   • "Search for news about AI"                          ║
+║                                                          ║
+║ CONTEXT RETRIEVAL:                                       ║
+║   • context search [query] - Find relevant past convos ║
+║   • insights           - Analyze conversation patterns  ║
+║   • "What did we talk about Python?" - AI-powered search║
 ║                                                          ║
 ║ CONTROL COMMANDS:                                        ║
 ║   • help         - Show this help                       ║

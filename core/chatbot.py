@@ -28,11 +28,11 @@ except Exception as e:
     TRANSLATION_AVAILABLE = False
     # Translation now handled by llm.gemini.translation module
 
-# Import user data utilities
-from automation.storage import load_user_data, save_user_data
+# Import user data utilities - REMOVED: using context_memory.db instead
+# from automation.storage import load_user_data, save_user_data
 
-# Load user data at startup
-USER_DATA = load_user_data()
+# Load user data at startup - REMOVED: using context_memory.db instead
+# USER_DATA = load_user_data()
 
 # Suppress stderr temporarily
 @contextlib.contextmanager
@@ -58,6 +58,17 @@ try:
     from llm.gemini.client import GeminiClient
 except ImportError:
     GeminiClient = None
+
+# Import Gemini Context Retrieval
+try:
+    from llm.gemini.context_retrieval import GeminiContextRetriever
+    GEMINI_CONTEXT_AVAILABLE = True
+except ImportError:
+    GeminiContextRetriever = None
+    GEMINI_CONTEXT_AVAILABLE = False
+
+# Import context manager for database storage
+from automation.storage import context_manager
 
 # Try to import OS detection
 try:
@@ -95,6 +106,12 @@ class ChatBot:
         self.data_retrieval_available = DATA_RETRIEVAL_AVAILABLE
         self.local_data_available = LOCAL_DATA_AVAILABLE
         self.web_data_available = WEB_DATA_AVAILABLE
+        
+        # Initialize Gemini-powered context retrieval
+        if GEMINI_CONTEXT_AVAILABLE:
+            self.context_retriever = GeminiContextRetriever(gemini_client)
+        else:
+            self.context_retriever = None
         
         if self.local_data_available:
             # Legacy universal_assistant removed - using Gemini AI
@@ -157,11 +174,11 @@ class ChatBot:
         
         Be friendly, helpful, and engaging in all interactions."""
     
-    def save_user_state(self):
-        """Save relevant user data."""
-        USER_DATA['last_conversation_history'] = self.conversation_history
-        USER_DATA['last_used'] = datetime.now().isoformat()
-        save_user_data(USER_DATA)
+    # def save_user_state(self): - REMOVED: using context_memory.db instead
+    #     """Save relevant user data."""
+    #     USER_DATA['last_conversation_history'] = self.conversation_history
+    #     USER_DATA['last_used'] = datetime.now().isoformat()
+    #     save_user_data(USER_DATA)
     
     def _handle_browser_request(self, user_message: str) -> str:
         """Handle user request to open browser."""
@@ -229,10 +246,10 @@ class ChatBot:
             "content": user_message,
             "timestamp": datetime.now().isoformat()
         })
-        self.save_user_state()
+        # self.save_user_state() - REMOVED: using context_memory.db instead
 
         # Build conversation context
-        context = self._build_conversation_context()
+        context = self._build_conversation_context(processed_message)
 
         # Check if user query needs data retrieval
         retrieval_context = ""
@@ -271,8 +288,20 @@ class ChatBot:
                         "response": bot_response,
                         "timestamp": datetime.now().isoformat()
                     })
+                    
+                    # Save conversation to database for context retrieval
+                    try:
+                        context_manager.save_conversation_turn(
+                            user_msg=user_message,
+                            assistant_response=bot_response,
+                            context_tags=[],  # Could be enhanced to extract topics
+                            importance=1.0   # Could be enhanced with importance scoring
+                        )
+                    except Exception as e:
+                        # Don't fail if database save fails
+                        pass
                     self._trim_history()
-                    self.save_user_state()
+                    # self.save_user_state() - REMOVED: using context_memory.db instead
                     # Let Gemini handle all language detection and translation intelligently
                     if detected_lang and detected_lang != 'en':
                         print(f"[DEBUG] Translating Gemini reply to: {detected_lang}")
@@ -331,19 +360,49 @@ class ChatBot:
                     return fallback_msg
             return fallback_msg
     
-    def _build_conversation_context(self) -> str:
-        """Build the conversation context for Gemini."""
-        context_parts = [self.system_prompt, "\n\nConversation History:"]
-        
-        # Add recent conversation history
-        for entry in self.conversation_history[-10:]:  # Last 10 exchanges
-            role = "Human" if entry["role"] == "user" else "Assistant"
-            context_parts.append(f"{role}: {entry['content']}")
-        
+    def _build_conversation_context(self, current_query: str = "") -> str:
+        """Build the conversation context for Gemini using AI-powered retrieval."""
+        context_parts = [self.system_prompt]
+
+        # Use Gemini-powered context retrieval if available
+        if self.context_retriever and current_query:
+            try:
+                context_result = self.context_retriever.retrieve_context(current_query, max_results=8)
+
+                if context_result.relevant_conversations:
+                    context_parts.append("\n\nRelevant Conversation History:")
+                    for conv in context_result.relevant_conversations:
+                        context_parts.append(f"User: {conv.user_message}")
+                        context_parts.append(f"Assistant: {conv.assistant_response}")
+
+                    # Add context summary if available
+                    if context_result.summary and context_result.summary != "Basic keyword matching (Gemini unavailable)":
+                        context_parts.append(f"\nContext Summary: {context_result.summary}")
+
+                else:
+                    # Fallback to recent history
+                    context_parts.append("\n\nRecent Conversation History:")
+                    for entry in self.conversation_history[-6:]:  # Last 6 exchanges as fallback
+                        role = "Human" if entry["role"] == "user" else "Assistant"
+                        context_parts.append(f"{role}: {entry['content']}")
+
+            except Exception as e:
+                # Fallback to basic recent history
+                context_parts.append("\n\nRecent Conversation History:")
+                for entry in self.conversation_history[-6:]:
+                    role = "Human" if entry["role"] == "user" else "Assistant"
+                    context_parts.append(f"{role}: {entry['content']}")
+        else:
+            # Fallback when no AI context retrieval available
+            context_parts.append("\n\nRecent Conversation History:")
+            for entry in self.conversation_history[-10:]:  # Last 10 exchanges
+                role = "Human" if entry["role"] == "user" else "Assistant"
+                context_parts.append(f"{role}: {entry['content']}")
+
         # Add current conversation marker
         if self.conversation_history:
             context_parts.append("\nAssistant:")
-        
+
         return "\n".join(context_parts)
     
     def _trim_history(self):
