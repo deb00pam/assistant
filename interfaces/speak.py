@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Standalone TTS script for Truvo Desktop Assistant
+Standalone TTS script for Desktop Assistant
 Handles text-to-speech functionality as an external process.
 Supports multiple languages using Google Text-to-Speech.
 """

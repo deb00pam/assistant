@@ -1,7 +1,7 @@
 """
-Interfaces Module - User interface components for Truvo
+Interfaces Module - User interface components
 
-This module contains different interfaces for interacting with Truvo.
+This module contains different interfaces for interacting with the assistant.
 """
 
 from .voice import VoiceHandler

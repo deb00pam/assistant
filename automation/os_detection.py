@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OS Detection Module for Truvo Desktop Assistant
+OS Detection Module for Desktop Assistant
 
 Detects the operating system and provides OS-specific information
 to help Gemini provide appropriate responses and commands.

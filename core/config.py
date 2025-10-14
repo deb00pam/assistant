@@ -1,5 +1,5 @@
 """
-Configuration module for Truvo Desktop Assistant
+Configuration module for Desktop Assistant
 
 This module contains the AssistantConfig dataclass that defines
 all configuration settings for the desktop assistant, and handles
@@ -40,7 +40,7 @@ def setup_environment():
     
     # Set USER_AGENT for LangChain web retrieval
     if 'USER_AGENT' not in os.environ:
-        os.environ['USER_AGENT'] = 'Truvo-Desktop-Assistant/1.0 (https://github.com/deb00pam/truvo)'
+        os.environ['USER_AGENT'] = 'Desktop-Assistant/1.0 (https://github.com/deb00pam/truvo)'
     
     _environment_setup_done = True
 

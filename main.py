@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Truvo - AI-Powered Desktop Assistant
+Assistant - AI-Powered Desktop Assistant
 
 A self-operating desktop assistant powered by Google's Gemini AI that can see,
 understand, and interact with your desktop environment through natural language commands.
@@ -336,7 +336,7 @@ def interactive_mode():
             
         pass  # Clean startup - no system messages
     except Exception as e:
-        print(f"Error: Failed to initialize Truvo: {e}")
+        print(f"Error: Failed to initialize Assistant: {e}")
         return
     
     while True:
@@ -451,7 +451,7 @@ def interactive_mode():
             if intent == "conversation":
                 # Handle as conversation
                 response = chatbot.chat(user_input)
-                print(f"Truvo: {response}")
+                print(f"Assistant: {response}")
                 
                 # Voice response if voice is enabled (silent)
                 if assistant.voice_handler and assistant.voice_handler.is_available:
@@ -461,7 +461,7 @@ def interactive_mode():
                 # Automation removed - treat as conversation
                 print("Automation functionality has been removed. Treating as conversation...")
                 response = chatbot.chat(f"I understand you want to: {user_input}. However, I can no longer perform desktop automation tasks. How can I help you with information or conversation instead?")
-                print(f"Truvo: {response}")
+                print(f"Assistant: {response}")
                 
                 # Voice response if voice is enabled (silent)
                 if assistant.voice_handler and assistant.voice_handler.is_available:
@@ -481,7 +481,7 @@ def interactive_mode():
                     print(f"Gemini local data retrieval failed: {e}")
                     # Fallback to conversation
                     response = chatbot.chat(user_input)
-                    print(f"Truvo: {response}")
+                    print(f"Assistant: {response}")
                     
             elif intent == "web_data_retrieval":
                 # Handle web search using Gemini AI
@@ -493,12 +493,12 @@ def interactive_mode():
                     print(f"Web search failed: {e}")
                     # Fallback to conversation
                     response = chatbot.chat(user_input)
-                    print(f"Truvo: {response}")
+                    print(f"Assistant: {response}")
                     
             else:
                 # Fallback - treat as conversation
                 response = chatbot.chat(user_input)
-                print(f"Truvo: {response}")
+                print(f"Assistant: {response}")
             
         except KeyboardInterrupt:
             print("\n\nTask interrupted by user")
@@ -540,7 +540,7 @@ def show_help():
 ║   • analyze      - Analyze current screen               ║
 ║   • chat-history - Show conversation history            ║
 ║   • clear-chat   - Clear conversation history           ║
-║   • quit         - Exit Truvo                           ║
+║   • quit         - Exit Assistant                       ║
 ║                                                          ║
 ║ VOICE COMMANDS:                                          ║
 ║   • voice        - Enable voice mode                    ║
@@ -580,7 +580,7 @@ def show_status(assistant: DesktopAssistant):
     
     print(f"""
 ╔══════════════════════════════════════════════════════════╗
-║                      TRUVO STATUS                        ║
+║                      ASSISTANT STATUS                    ║
 ╠══════════════════════════════════════════════════════════╣
 ║ Assistant Type: Conversational AI Assistant            ║
 ║ Automation: Disabled (Removed)                         ║
@@ -697,7 +697,7 @@ def start_continuous_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
         if is_chat:
             print("Processing...")
             response = chatbot.chat(text)
-            print(f"Truvo: {response}")
+            print(f"Assistant: {response}")
             # Voice after text is shown
             assistant.voice_handler.speak(response)
         else:
@@ -774,7 +774,7 @@ def start_interactive_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
             
             if is_chat:
                 response = chatbot.chat(text)
-                print(f"Truvo: {response}")
+                print(f"Assistant: {response}")
                 # Voice response - use external TTS process to avoid conflicts
                 if assistant.voice_handler and assistant.voice_handler.is_available:
                     try:
@@ -795,7 +795,7 @@ def start_interactive_voice_mode(assistant: DesktopAssistant, chatbot: ChatBot):
                 assistant.voice_handler.speak("I understand your request, but automation functionality has been removed. Let me help you with conversation instead.")
                 
                 response = chatbot.chat(f"I understand you want to: {text}. However, I can no longer perform desktop automation tasks. How can I help you with information or conversation instead?")
-                print(f"Truvo: {response}")
+                print(f"Assistant: {response}")
                 
                 # Voice response for the conversation
                 if assistant.voice_handler and assistant.voice_handler.is_available:
@@ -843,7 +843,7 @@ def handle_voice_input(assistant: DesktopAssistant, chatbot: ChatBot):
             # Handle as conversation
             print(f"\nProcessing conversation...")
             response = chatbot.chat(text)
-            print(f"Truvo: {response}")
+            print(f"Assistant: {response}")
             assistant.voice_handler.speak(response)
         else:
             # Automation removed - treat as conversation
@@ -851,7 +851,7 @@ def handle_voice_input(assistant: DesktopAssistant, chatbot: ChatBot):
             assistant.voice_handler.speak("I understand your request, but automation functionality has been removed.")
             
             response = chatbot.chat(f"I understand you want to: {text}. However, I can no longer perform desktop automation tasks. How can I help you with information or conversation instead?")
-            print(f"Truvo: {response}")
+            print(f"Assistant: {response}")
             assistant.voice_handler.speak(response)
     else:
         print("No voice input detected")
@@ -951,7 +951,7 @@ def single_task_mode(task: str):
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Truvo - AI-powered conversational assistant",
+        description="AI-powered conversational assistant",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

@@ -1,5 +1,5 @@
 """
-Desktop Assistant - Main assistant class for Truvo
+Desktop Assistant - Main assistant class
 
 This module contains the DesktopAssistant class that orchestrates all components
 to execute desktop automation tasks and conversational interactions.
@@ -95,7 +95,7 @@ class DesktopAssistant:
         self.task_progress = []
         self.is_running = False
         
-        logging.info("Truvo Desktop Assistant initialized")
+        logging.info("Desktop Assistant initialized")
     
   
     def _confirm_action(self, action: Dict[str, Any]) -> bool:

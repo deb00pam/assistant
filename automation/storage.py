@@ -1,5 +1,5 @@
 """
-Enhanced Storage System for Truvo - Context Memory & Data Persistence
+Enhanced Storage System - Context Memory & Data Persistence
 
 Handles:
 - Conversation history & context

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Gemini-Powered Context Retrieval System for Truvo
+Gemini-Powered Context Retrieval System
 Uses Google's Gemini AI for intelligent conversation history retrieval and analysis.
 """
 

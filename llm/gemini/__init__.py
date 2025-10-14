@@ -1,7 +1,7 @@
 """
 Gemini AI Package
 
-This package contains all Gemini AI-powered components for the Truvo assistant.
+This package contains all Gemini AI-powered components for the assistant.
 
 Components:
 - client.py: Gemini AI client and configuration

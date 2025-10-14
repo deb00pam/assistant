@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Gemini Client Module for Truvo Desktop Assistant
+Gemini Client Module for Desktop Assistant
 Client for interacting with Google's Gemini AI API.
 """
 
@@ -205,7 +205,7 @@ You are a desktop assistant AI that can see and understand computer screens.
 🚨 CRITICAL MISSION: You MUST complete this task by ANY MEANS NECESSARY. The user is completely dependent on you to accomplish this task. FAILURE IS NOT AN OPTION.
 
 TASK: {task_description}
-{os_context}TruvoTest
+{os_context}AssistantTest
 
 
 MANDATORY REQUIREMENTS - YOU MUST FOLLOW THESE:

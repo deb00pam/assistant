@@ -1,7 +1,7 @@
 
 #!/usr/bin/env python3
 """
-Gemini AI Translation Module for Truvo Desktop Assistant
+Gemini AI Translation Module for Desktop Assistant
 Uses Google's Gemini AI for language detection and translation.
 """
 

@@ -1,5 +1,5 @@
 """
-Core Module - Business logic and orchestration for Truvo
+Core Module - Business logic and orchestration
 
 This module contains the core business logic, orchestration components,
 and configuration.

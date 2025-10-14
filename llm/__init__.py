@@ -1,5 +1,5 @@
 """
-LLM Module - Language Model integrations for Truvo
+LLM Module - Language Model integrations for the Assistant
 
 This module contains integrations with various Large Language Model providers.
 Contains the Gemini AI package with all Gemini-powered components.

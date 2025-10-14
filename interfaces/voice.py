@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Voice Handler Module for Truvo Desktop Assistant
+Voice Handler Module for Desktop Assistant
 Handles speech recognition and text-to-speech functionality.
 """
 import sys

@@ -1,5 +1,5 @@
 """
-Automation Module - Storage and utilities for Truvo
+Automation Module - Storage and utilities
 
 This module contains storage utilities and OS detection.
 GUI automation components have been removed.

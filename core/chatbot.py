@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ChatBot Module for Truvo Desktop Assistant
+ChatBot Module for Desktop Assistant
 Handles conversational interactions using Gemini AI with multilingual support.
 """
 
@@ -134,7 +134,7 @@ class ChatBot:
             except Exception as e:
                 os_context = ""
         
-        self.system_prompt = f"""You are a helpful and friendly AI assistant integrated into Truvo, a desktop automation tool. 
+        self.system_prompt = f"""You are a helpful and friendly AI assistant integrated into an AI assistant system. 
         You can have natural conversations about any topic while also being aware that you're part of a system 
         that can perform desktop automation tasks.{os_context}
         

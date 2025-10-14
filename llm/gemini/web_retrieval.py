@@ -12,7 +12,7 @@ Features:
 - No external API dependencies (besides Gemini)
 - Intelligent query understanding and response formatting
 
-Author: Truvo Assistant  
+Author: Assistant  
 Version: 2.0 - Gemini AI Web Retrieval
 """
 
